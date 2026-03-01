@@ -1,0 +1,14 @@
+[package]
+name = "nixcfg"
+version = "0.1.0"
+edition = "2024"
+description = "bridge config structs to NixOS module options"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nixcfg-derive = { path = "../nixcfg-derive", optional = true }
+
+[features]
+default = ["derive"]
+derive = ["dep:nixcfg-derive"]

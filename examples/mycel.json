@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "name": "mycel",
+  "description": "mycel discord bot configuration",
+  "options": {
+    "data_dir": {
+      "type": "path",
+      "default": "/var/lib/mycel",
+      "description": "directory for the database, models, and workspace"
+    },
+    "model": {
+      "type": "string",
+      "default": "claude-sonnet-4-20250514",
+      "description": "anthropic model to use"
+    },
+    "log_level": {
+      "type": {
+        "enum": ["trace", "debug", "info", "warn", "error"]
+      },
+      "default": "info",
+      "description": "log level"
+    },
+    "cache_warming": {
+      "type": "bool",
+      "default": false,
+      "description": "keep the prompt cache warm between messages"
+    },
+    "discord_token": {
+      "type": "string",
+      "secret": true,
+      "description": "discord bot token"
+    },
+    "anthropic_key": {
+      "type": { "optional": "string" },
+      "secret": true,
+      "description": "anthropic API key (not needed with OAuth)"
+    }
+  }
+}
