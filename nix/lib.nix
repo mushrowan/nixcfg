@@ -140,6 +140,7 @@
     schema,
     naming ? "camelCase",
     prefix ? ["services"],
+    settingsAttr ? null,
     overrides ? {},
     extraOverrides ? {},
   }: let
@@ -165,15 +166,25 @@
     extraOpts = lib.mapAttrs (_: attrs: lib.mkOption attrs) extraOverrides;
 
     optionPath = prefix ++ [parsed.name];
+
+    # schema options go either flat or nested under settingsAttr
+    schemaOpts = opts // extraOpts;
+    topLevel =
+      {enable = lib.mkEnableOption (parsed.description or parsed.name);}
+      // (
+        if settingsAttr != null
+        then {
+          ${settingsAttr} = lib.mkOption {
+            type = lib.types.submodule {options = schemaOpts;};
+            default = {};
+            description = "configuration options for ${parsed.name}";
+          };
+        }
+        else schemaOpts
+      );
   in
     {config, ...}: {
-      options = lib.setAttrByPath optionPath (
-        {
-          enable = lib.mkEnableOption (parsed.description or parsed.name);
-        }
-        // opts
-        // extraOpts
-      );
+      options = lib.setAttrByPath optionPath topLevel;
     };
 
   # -- public: config conversion helpers --

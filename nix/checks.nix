@@ -381,6 +381,37 @@ in {
     assert cfg.data_dir == "/var/lib/mycel";
       ok "snake-e2e";
 
+  # ── settingsAttr ───────────────────────────────────────────────────
+
+  nix-settings-attr = let
+    settingsMod = nixcfgLib.mkModule {
+      schema = ../examples/mycel.json;
+      settingsAttr = "settings";
+    };
+    settingsEvaled = lib.evalModules {modules = [settingsMod];};
+    settingsModOpts = settingsEvaled.options.services.mycel;
+  in
+    # enable stays at top level
+    assert settingsModOpts ? enable;
+    # schema options are nested under settings
+    assert settingsModOpts ? settings;
+    assert !(settingsModOpts ? dataDir);
+    assert settingsModOpts.settings.type.name == "submodule";
+      ok "settings-attr";
+
+  nix-settings-attr-custom-name = let
+    settingsMod = nixcfgLib.mkModule {
+      schema = ../examples/mycel.json;
+      settingsAttr = "config";
+    };
+    settingsEvaled = lib.evalModules {modules = [settingsMod];};
+    settingsModOpts = settingsEvaled.options.services.mycel;
+  in
+    assert settingsModOpts ? enable;
+    assert settingsModOpts ? config;
+    assert !(settingsModOpts ? settings);
+      ok "settings-attr-custom-name";
+
   # ── name conversion functions ─────────────────────────────────────
 
   nix-name-conversions =

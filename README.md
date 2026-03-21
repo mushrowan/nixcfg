@@ -113,7 +113,7 @@ straightforward: emit JSON matching `schema/v1.md`.
 
 | function            | signature                                                                  |
 | ------------------- | -------------------------------------------------------------------------- |
-| `mkModule`          | `{ schema, naming?, prefix?, overrides?, extraOverrides? } → NixOS module` |
+| `mkModule`          | `{ schema, naming?, prefix?, settingsAttr?, overrides?, extraOverrides? } → NixOS module` |
 | `optionsFromSchema` | `{ naming? } → schema → options`                                           |
 | `optionsFromFile`   | `{ naming? } → path → options`                                             |
 | `toCliArgs`         | `{ naming?, output? } → schema → cfg → [string]`                           |
@@ -151,6 +151,22 @@ nixcfg.lib.mkModule {
 `overrides` keys are validated against the schema. `extraOverrides` adds
 nix-only options.
 
+### settingsAttr
+
+by default, generated options are placed directly under the module path
+(e.g. `services.myapp.dataDir`). set `settingsAttr` to nest them under a
+submodule instead:
+
+```nix
+nixcfg.lib.mkModule {
+  schema = ./schema.json;
+  settingsAttr = "settings";
+}
+# services.myapp.enable         (always top-level)
+# services.myapp.settings.dataDir
+# services.myapp.settings.logLevel
+```
+
 ### debug
 
 ```nix
@@ -160,7 +176,7 @@ apps.debug = (nixcfg.lib.mkLib pkgs).mkDebugApp { schema = ./schema.json; };
 
 ## checks
 
-`nix flake check` runs 28 checks: 25 nix (naming conventions, type mapping,
-secrets, defaults, module generation, CLI/env/config conversion with output
-naming, overrides, end-to-end snake_case, name conversions) and 3 rust (cargo
-test, clippy, fmt).
+`nix flake check` runs 30 checks: 27 nix (naming conventions, type mapping,
+secrets, defaults, module generation, settingsAttr, CLI/env/config conversion
+with output naming, overrides, end-to-end snake_case, name conversions) and 3
+rust (cargo test, clippy, fmt).
