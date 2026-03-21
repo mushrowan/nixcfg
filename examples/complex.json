@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "name": "complex-app",
+  "description": "complex example exercising all schema features",
+  "options": {
+    "hostname": {
+      "type": "string",
+      "default": "localhost",
+      "description": "server hostname"
+    },
+    "port": {
+      "type": "port",
+      "default": 8080,
+      "description": "listen port"
+    },
+    "debug": {
+      "type": "bool",
+      "default": false,
+      "description": "enable debug mode"
+    },
+    "workers": {
+      "type": "uint",
+      "default": 4,
+      "description": "number of worker threads"
+    },
+    "max_retries": {
+      "type": "int",
+      "default": -1,
+      "description": "max retries (-1 for unlimited)"
+    },
+    "data_dir": {
+      "type": "path",
+      "default": "/var/lib/complex",
+      "description": "data directory"
+    },
+    "tags": {
+      "type": { "list": "string" },
+      "default": [],
+      "description": "metadata tags"
+    },
+    "labels": {
+      "type": { "attrs": "string" },
+      "description": "key-value labels"
+    },
+    "log_level": {
+      "type": { "enum": ["trace", "debug", "info", "warn", "error"] },
+      "default": "info",
+      "description": "log level"
+    },
+    "optional_feature": {
+      "type": { "optional": "string" },
+      "description": "optional feature flag"
+    },
+    "database": {
+      "type": {
+        "submodule": {
+          "host": {
+            "type": "string",
+            "default": "localhost",
+            "description": "database host"
+          },
+          "port": {
+            "type": "port",
+            "default": 5432,
+            "description": "database port"
+          },
+          "name": {
+            "type": "string",
+            "default": "mydb",
+            "description": "database name"
+          },
+          "pool_size": {
+            "type": "uint",
+            "default": 10,
+            "description": "connection pool size"
+          }
+        }
+      },
+      "description": "database connection settings"
+    },
+    "api_key": {
+      "type": "string",
+      "secret": true,
+      "description": "api authentication key"
+    },
+    "db_password": {
+      "type": { "optional": "string" },
+      "secret": true,
+      "description": "database password"
+    },
+    "allowed_origins": {
+      "type": { "optional": { "list": "string" } },
+      "description": "CORS allowed origins"
+    }
+  }
+}
