@@ -66,13 +66,6 @@ struct Config {
 }
 ```
 
-emit the schema:
-
-```rust
-let schema = nixcfg::Schema::from::<Config>("myapp");
-println!("{}", schema.to_json_pretty());
-```
-
 consume in nix:
 
 ```nix
@@ -169,9 +162,24 @@ nixcfg.lib.mkModule {
 
 ### debug
 
+inspect the generated module with `nix run .#debug`:
+
 ```nix
 apps.debug = (nixcfg.lib.mkLib pkgs).mkDebugApp { schema = ./schema.json; };
-# nix run .#debug
+```
+
+```
+$ nix run .#debug
+services.myapp = {
+  enable = mkEnableOption "myapp";
+
+  dataDir = mkOption {
+    type = types.path;
+    default = "/var/lib/myapp";
+    description = "data directory";
+  };
+  ...
+};
 ```
 
 ## checks
