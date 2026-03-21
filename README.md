@@ -158,6 +158,7 @@ apps.debug = (nixcfg.lib.mkLib pkgs).mkDebugApp { schema = ./schema.json; };
 
 ## checks
 
-`nix flake check` runs 14 checks: 11 nix (option names, secrets, defaults,
-module generation, CLI/env/config conversion, overrides, naming) and 3 rust
-(cargo test, clippy, fmt).
+`nix flake check` runs 28 checks: 25 nix (naming conventions, type mapping,
+secrets, defaults, module generation, CLI/env/config conversion with output
+naming, overrides, end-to-end snake_case, name conversions) and 3 rust (cargo
+test, clippy, fmt).
