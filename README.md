@@ -1,7 +1,7 @@
 # nixcfg
 
-generate NixOS module options from config structs. define your config once in
-rust, get typed nix options automatically.
+generate NixOS module options from your program's config types. define your
+config once, get typed nix options automatically.
 
 ```
 config struct ──→ language driver ──→ schema.json ──→ nix lib ──→ mkOption defs
@@ -40,7 +40,7 @@ all benefits of strongly-typed modules.
 The goal of NixCfg is:  
 **the program == the source of truth for its nix module options**
 
-## quick example
+## quick example (rust driver)
 
 ```rust
 use nixcfg::NixCfg;
@@ -100,7 +100,7 @@ schema types: `string`, `bool`, `int`, `uint`, `path`, `port`, `optional`,
 
 a driver is anything that emits the schema JSON from your config types.
 
-**rust** (`drivers/rust/`) - proc macro derive. see the crate docs for usage.
+**rust** (`drivers/rust/`) - proc macro derive, as shown in the example above.
 
 more drivers (go, python, typescript) are planned. writing one is
 straightforward: emit JSON matching `schema/v1.md`.
