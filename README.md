@@ -29,11 +29,13 @@ config struct ──→ language driver ──→ schema.json ──→ nix lib 
 
 ## the possible solutions
 
-**option 1:** don't expose a settings submodule at all. let users figure out how
-to symlink the raw config into the right place, or tell them to do it
-imperatively. **option 2:** expose a configFile option. **option 3:** expose an
-[extra]Settings option, then use lib.toTOML/toJSON/toYAML/toWhatever on it. lose
-all benefits of strongly-typed modules.
+- **option 1:** don't expose a settings submodule at all. let users figure out
+  how to symlink the raw config into the right place, or tell them to do it
+  imperatively.
+- **option 2:** expose a configFile option.
+- **option 3:** expose an [extra]Settings option, then use
+  lib.toTOML/toJSON/toYAML/toWhatever on it. lose all benefits of
+  strongly-typed modules.
 
 ### **_option 4:_** use NixCfg.
 
