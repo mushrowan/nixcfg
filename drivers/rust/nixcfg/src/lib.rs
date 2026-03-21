@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 #[cfg(feature = "derive")]
-pub use nixcfg_derive::NixOptions;
+pub use nixcfg_derive::{NixCfg, NixOptions};
 
 // re-exported for generated code
 pub use serde_json;
@@ -267,6 +267,77 @@ impl<K, V: NixType> NixType for HashMap<K, V> {
 impl<K, V: NixType> NixType for BTreeMap<K, V> {
     fn schema_type() -> SchemaType {
         SchemaType::Attrs(Box::new(V::schema_type()))
+    }
+}
+
+// ---------- foreign type impls ----------
+
+#[cfg(feature = "ipnet")]
+impl NixType for ipnet::IpNet {
+    fn schema_type() -> SchemaType {
+        SchemaType::String
+    }
+}
+
+#[cfg(feature = "ipnet")]
+impl NixType for ipnet::Ipv4Net {
+    fn schema_type() -> SchemaType {
+        SchemaType::String
+    }
+}
+
+#[cfg(feature = "ipnet")]
+impl NixType for ipnet::Ipv6Net {
+    fn schema_type() -> SchemaType {
+        SchemaType::String
+    }
+}
+
+#[cfg(feature = "secrecy")]
+impl NixType for secrecy::SecretString {
+    fn schema_type() -> SchemaType {
+        SchemaType::String
+    }
+}
+
+// ---------- defaults merging ----------
+
+impl Schema {
+    /// merge defaults from a serde-serialised `T::default()` value into the
+    /// schema. fields present in the JSON object override any `#[nixcfg(default)]`
+    /// annotation. nested submodules are merged recursively
+    pub fn with_defaults(mut self, defaults: serde_json::Value) -> Self {
+        if let serde_json::Value::Object(map) = defaults {
+            merge_defaults(&mut self.options, &map);
+        }
+        self
+    }
+}
+
+fn merge_defaults(
+    options: &mut [(std::string::String, OptionDef)],
+    defaults: &serde_json::Map<std::string::String, serde_json::Value>,
+) {
+    for (name, opt) in options.iter_mut() {
+        let Some(val) = defaults.get(name) else {
+            continue;
+        };
+        // recurse into submodules
+        if let SchemaType::Submodule(ref mut sub_opts) = opt.type_
+            && let serde_json::Value::Object(sub_map) = val
+        {
+            merge_defaults(sub_opts, sub_map);
+            continue;
+        }
+        // for optional submodules, recurse into the inner submodule
+        if let SchemaType::Optional(ref mut inner) = opt.type_
+            && let SchemaType::Submodule(ref mut sub_opts) = **inner
+            && let serde_json::Value::Object(sub_map) = val
+        {
+            merge_defaults(sub_opts, sub_map);
+            continue;
+        }
+        opt.default = Some(val.clone());
     }
 }
 
