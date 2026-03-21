@@ -4,7 +4,7 @@ generate NixOS module options from config structs. define your config once in
 rust, get typed nix options automatically.
 
 ```
-rust struct ──→ proc macro ──→ schema.json ──→ nix lib ──→ mkOption defs
+config struct ──→ language driver ──→ schema.json ──→ nix lib ──→ mkOption defs
 ```
 
 ## dilemma
