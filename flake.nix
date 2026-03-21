@@ -32,6 +32,15 @@
   in {
     lib = nixcfgLib;
 
+    devShells = eachSystem ({pkgs, craneLib}: {
+      default = pkgs.mkShell {
+        nativeBuildInputs = [
+          pkgs.rust-bin.stable.latest.default
+          pkgs.rust-analyzer
+        ];
+      };
+    });
+
     checks = eachSystem ({pkgs, craneLib}:
       (import ./nix/checks.nix {inherit lib pkgs nixcfgLib craneLib;})
       // (import ./nix/rust-checks.nix {inherit lib pkgs craneLib;}));
