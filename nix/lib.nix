@@ -96,6 +96,8 @@
       then "path to file containing ${baseDesc}"
       else baseDesc;
 
+    isSubmodule = opt.type ? submodule;
+
     nixDefault =
       if isSecret && isOptional
       then {default = null;}
@@ -105,6 +107,8 @@
       then {default = opt.default;}
       else if isOptional
       then {default = null;}
+      else if isSubmodule
+      then {default = {};}
       else {};
     baseArgs =
       {
