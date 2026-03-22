@@ -150,7 +150,7 @@
     extraOverrides ? {},
   }: let
     parsed =
-      if builtins.isAttrs schema
+      if builtins.isAttrs schema && schema ? version
       then schema
       else builtins.fromJSON (builtins.readFile schema);
 
