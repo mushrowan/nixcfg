@@ -1,96 +1,125 @@
 {
-  "version": 1,
-  "name": "complex-app",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ComplexConfig",
   "description": "complex example exercising all schema features",
-  "options": {
+  "type": "object",
+  "x-nixcfg-name": "complex-app",
+  "properties": {
     "hostname": {
       "type": "string",
-      "default": "localhost",
-      "description": "server hostname"
+      "description": "server hostname",
+      "default": "localhost"
     },
     "port": {
-      "type": "port",
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "listen port",
       "default": 8080,
-      "description": "listen port"
+      "x-nixcfg-port": true
     },
     "debug": {
-      "type": "bool",
-      "default": false,
-      "description": "enable debug mode"
+      "type": "boolean",
+      "description": "enable debug mode",
+      "default": false
     },
     "workers": {
-      "type": "uint",
-      "default": 4,
-      "description": "number of worker threads"
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "description": "number of worker threads",
+      "default": 4
     },
     "max_retries": {
-      "type": "int",
-      "default": -1,
-      "description": "max retries (-1 for unlimited)"
+      "type": "integer",
+      "format": "int32",
+      "description": "max retries (-1 for unlimited)",
+      "default": -1
     },
     "data_dir": {
-      "type": "path",
-      "default": "/var/lib/complex",
-      "description": "data directory"
+      "type": "string",
+      "description": "data directory",
+      "default": "/var/lib/complex"
     },
     "tags": {
-      "type": { "list": "string" },
-      "default": [],
-      "description": "metadata tags"
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "metadata tags",
+      "default": []
     },
     "labels": {
-      "type": { "attrs": "string" },
+      "type": "object",
+      "additionalProperties": { "type": "string" },
       "description": "key-value labels"
     },
     "log_level": {
-      "type": { "enum": ["trace", "debug", "info", "warn", "error"] },
-      "default": "info",
-      "description": "log level"
+      "$ref": "#/$defs/LogLevel",
+      "description": "log level",
+      "default": "info"
     },
     "optional_feature": {
-      "type": { "optional": "string" },
+      "type": ["string", "null"],
       "description": "optional feature flag"
     },
     "database": {
-      "type": {
-        "submodule": {
-          "host": {
-            "type": "string",
-            "default": "localhost",
-            "description": "database host"
-          },
-          "port": {
-            "type": "port",
-            "default": 5432,
-            "description": "database port"
-          },
-          "name": {
-            "type": "string",
-            "default": "mydb",
-            "description": "database name"
-          },
-          "pool_size": {
-            "type": "uint",
-            "default": 10,
-            "description": "connection pool size"
-          }
-        }
-      },
+      "$ref": "#/$defs/DatabaseConfig",
       "description": "database connection settings"
     },
     "api_key": {
       "type": "string",
-      "secret": true,
-      "description": "api authentication key"
+      "description": "api authentication key",
+      "x-nixcfg-secret": true
     },
     "db_password": {
-      "type": { "optional": "string" },
-      "secret": true,
-      "description": "database password"
+      "type": ["string", "null"],
+      "description": "database password",
+      "x-nixcfg-secret": true
     },
     "allowed_origins": {
-      "type": { "optional": { "list": "string" } },
+      "type": ["array", "null"],
+      "items": { "type": "string" },
       "description": "CORS allowed origins"
+    }
+  },
+  "required": ["hostname", "port", "debug", "workers", "max_retries", "data_dir", "tags", "log_level", "api_key", "database"],
+  "$defs": {
+    "LogLevel": {
+      "type": "string",
+      "enum": ["trace", "debug", "info", "warn", "error"]
+    },
+    "DatabaseConfig": {
+      "type": "object",
+      "description": "database connection settings",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "database host",
+          "default": "localhost"
+        },
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "database port",
+          "default": 5432,
+          "x-nixcfg-port": true
+        },
+        "name": {
+          "type": "string",
+          "description": "database name",
+          "default": "mydb"
+        },
+        "pool_size": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "connection pool size",
+          "default": 10
+        }
+      },
+      "required": ["host", "port", "name", "pool_size"]
     }
   }
 }

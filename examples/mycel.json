@@ -1,39 +1,46 @@
 {
-  "version": 1,
-  "name": "mycel",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
   "description": "mycel discord bot configuration",
-  "options": {
+  "type": "object",
+  "x-nixcfg-name": "mycel",
+  "properties": {
     "data_dir": {
-      "type": "path",
-      "default": "/var/lib/mycel",
-      "description": "directory for the database, models, and workspace"
+      "type": "string",
+      "description": "directory for the database, models, and workspace",
+      "default": "/var/lib/mycel"
     },
     "model": {
       "type": "string",
-      "default": "claude-sonnet-4-20250514",
-      "description": "anthropic model to use"
+      "description": "anthropic model to use",
+      "default": "claude-sonnet-4-20250514"
     },
     "log_level": {
-      "type": {
-        "enum": ["trace", "debug", "info", "warn", "error"]
-      },
-      "default": "info",
-      "description": "log level"
+      "$ref": "#/$defs/LogLevel",
+      "description": "log level",
+      "default": "info"
     },
     "cache_warming": {
-      "type": "bool",
-      "default": false,
-      "description": "keep the prompt cache warm between messages"
+      "type": "boolean",
+      "description": "keep the prompt cache warm between messages",
+      "default": false
     },
     "discord_token": {
       "type": "string",
-      "secret": true,
-      "description": "discord bot token"
+      "description": "discord bot token",
+      "x-nixcfg-secret": true
     },
     "anthropic_key": {
-      "type": { "optional": "string" },
-      "secret": true,
-      "description": "anthropic API key (not needed with OAuth)"
+      "type": ["string", "null"],
+      "description": "anthropic API key (not needed with OAuth)",
+      "x-nixcfg-secret": true
+    }
+  },
+  "required": ["data_dir", "model", "log_level", "discord_token"],
+  "$defs": {
+    "LogLevel": {
+      "type": "string",
+      "enum": ["trace", "debug", "info", "warn", "error"]
     }
   }
 }

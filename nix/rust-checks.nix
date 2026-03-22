@@ -13,7 +13,7 @@
   commonArgs = {
     inherit src;
     pname = "nixcfg-rs";
-    version = "0.1.0";
+    version = "0.2.0";
     strictDeps = true;
   };
 
@@ -29,6 +29,6 @@ in {
   rust-fmt = craneLib.cargoFmt {
     inherit src;
     pname = "nixcfg-rs";
-    version = "0.1.0";
+    version = "0.2.0";
   };
 }

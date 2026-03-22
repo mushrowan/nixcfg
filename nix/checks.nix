@@ -1,4 +1,4 @@
-# nix lib checks for nixcfg
+# nix lib checks for nixcfg (JSON Schema edition)
 {
   lib,
   pkgs,
@@ -12,7 +12,7 @@
   # -- helper --
   ok = name: pkgs.runCommand "nixcfg-${name}" {} "touch $out";
 
-  # find a flag-value pair in a list of CLI args (handles repeated flags)
+  # find a flag-value pair in a list of CLI args
   hasPair = args: flag: val: let
     len = builtins.length args;
     check = i:
@@ -146,18 +146,18 @@ in {
     assert o.debug.type.name == "bool";
     assert o.workers.type.name == "unsignedInt";
     assert o.maxRetries.type.name == "int";
-    assert o.dataDir.type.name == "path";
-    # enum
+    assert o.dataDir.type.name == "str";
+    # enum (via $ref)
     assert o.logLevel.type.name == "enum";
-    # optional
+    # optional (nullable)
     assert o.optionalFeature.type.name == "nullOr";
-    # list
+    # list (array)
     assert o.tags.type.name == "listOf";
-    # attrs
+    # attrs (additionalProperties)
     assert o.labels.type.name == "attrsOf";
-    # submodule
+    # submodule (object with properties, via $ref)
     assert o.database.type.name == "submodule";
-    # nested optional list
+    # nullable array
     assert o.allowedOrigins.type.name == "nullOr";
     # secrets become path
     assert o.apiKeyPath.type.name == "path";
@@ -168,7 +168,7 @@ in {
   # ── secrets ───────────────────────────────────────────────────────
 
   nix-secrets =
-    # file suffix applied
+    # path suffix applied
     assert complexOpts ? apiKeyPath;
     assert complexOpts ? dbPasswordPath;
     assert !(complexOpts ? apiKey);
@@ -421,4 +421,222 @@ in {
     assert nixcfgLib.snakeToKebab "data_dir" == "data-dir";
     assert nixcfgLib.snakeToScreaming "data_dir" == "DATA_DIR";
       ok "name-conversions";
+
+  # ── nix driver (from-options) ─────────────────────────────────────
+
+  nix-driver-types = let
+    # simple type mapping tests
+    t = nixcfgLib.typeToSchema;
+  in
+    assert (t lib.types.str).type == "string";
+    assert (t lib.types.bool).type == "boolean";
+    assert (t lib.types.int).type == "integer";
+    assert (t lib.types.ints.unsigned).minimum == 0;
+    # port is indistinguishable from u16 in the type system
+    assert (t lib.types.port).minimum == 0;
+    assert (t lib.types.port).maximum == 65535;
+    assert (t (lib.types.enum ["a" "b"])).enum == ["a" "b"];
+    assert (t (lib.types.listOf lib.types.str)).type == "array";
+    assert (t (lib.types.attrsOf lib.types.str)).type == "object";
+    assert (t (lib.types.attrsOf lib.types.str)) ? additionalProperties;
+    assert (t (lib.types.nullOr lib.types.str)).type == ["string" "null"];
+      ok "driver-types";
+
+  nix-driver-module = let
+    testModule = {lib, ...}: {
+      options.test-app = {
+        host = lib.mkOption {
+          type = lib.types.str;
+          default = "localhost";
+          description = "server hostname";
+        };
+        port = lib.mkOption {
+          type = lib.types.port;
+          default = 8080;
+          description = "listen port";
+        };
+        debug = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "enable debug mode";
+        };
+        tags = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [];
+          description = "metadata tags";
+        };
+        level = lib.mkOption {
+          type = lib.types.enum ["info" "warn" "error"];
+          default = "info";
+          description = "log level";
+        };
+        extra = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "optional extra";
+        };
+        labels = lib.mkOption {
+          type = lib.types.attrsOf lib.types.str;
+          default = {};
+          description = "key-value labels";
+        };
+      };
+    };
+
+    schema = nixcfgLib.schemaFromModule {
+      module = testModule;
+      name = "test-app";
+      description = "test application";
+      path = ["test-app"];
+    };
+
+    p = schema.properties;
+  in
+    # schema metadata
+    assert schema."x-nixcfg-name" == "test-app";
+    assert schema.description == "test application";
+    assert schema.type == "object";
+    # types mapped correctly
+    assert p.host.type == "string";
+    assert p.host.default == "localhost";
+    assert p.port.type == "integer";
+    assert p.port.minimum == 0;
+    assert p.port.default == 8080;
+    assert p.debug.type == "boolean";
+    assert p.tags.type == "array";
+    assert p.level ? enum;
+    assert p.level.enum == ["info" "warn" "error"];
+    assert p.extra.type == ["string" "null"];
+    assert p.labels.type == "object";
+    assert p.labels ? additionalProperties;
+      ok "driver-module";
+
+  nix-driver-roundtrip = let
+    # generate schema from a nix module, then consume it back with mkModule
+    testModule = {lib, ...}: {
+      options.roundtrip = {
+        host = lib.mkOption {
+          type = lib.types.str;
+          default = "0.0.0.0";
+          description = "bind address";
+        };
+        port = lib.mkOption {
+          type = lib.types.port;
+          default = 3000;
+          description = "listen port";
+        };
+        verbose = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "verbose output";
+        };
+      };
+    };
+
+    # step 1: nix options → JSON Schema
+    schema = nixcfgLib.schemaFromModule {
+      module = testModule;
+      name = "roundtrip";
+      description = "roundtrip test";
+      path = ["roundtrip"];
+    };
+
+    # step 2: JSON Schema → nix module (via mkModule)
+    generatedMod = nixcfgLib.mkModule {
+      schema = schema;
+      naming = "snake_case";
+    };
+
+    evaled = lib.evalModules {modules = [generatedMod];};
+    opts = evaled.options.services.roundtrip;
+  in
+    assert opts ? enable;
+    assert opts ? host;
+    assert opts ? port;
+    assert opts ? verbose;
+    assert opts.host.default == "0.0.0.0";
+    assert opts.port.default == 3000;
+    # port roundtrips as unsignedInt (port marker lost in nix→schema)
+    assert opts.port.type.name == "unsignedInt";
+    assert opts.verbose.default == false;
+      ok "driver-roundtrip";
+
+  # ── config format extension ───────────────────────────────────────
+
+  nix-config-format-toml = let
+    schema = builtins.fromJSON (builtins.toJSON (simple // {
+      "x-nixcfg-config-format" = "toml";
+    }));
+    result = nixcfgLib.mkConfigFile {
+      inherit schema pkgs;
+      settings = {
+        dataDir = "/var/lib/mycel";
+        model = "claude-sonnet-4-20250514";
+        logLevel = "info";
+        cacheWarming = true;
+        discordTokenPath = "/run/secrets/token";
+      };
+    };
+  in
+    # result is a store path derivation
+    assert result != null;
+    assert lib.hasSuffix "mycel-config.toml" (builtins.unsafeDiscardStringContext "${result}");
+      ok "config-format-toml";
+
+  nix-config-format-json = let
+    schema = builtins.fromJSON (builtins.toJSON (simple // {
+      "x-nixcfg-config-format" = "json";
+    }));
+    result = nixcfgLib.mkConfigFile {
+      inherit schema pkgs;
+      settings = {
+        dataDir = "/tmp/test";
+        model = "test";
+        logLevel = "info";
+        cacheWarming = false;
+        discordTokenPath = "/run/secrets/token";
+      };
+    };
+  in
+    assert result != null;
+    assert lib.hasSuffix "mycel-config.json" (builtins.unsafeDiscardStringContext "${result}");
+      ok "config-format-json";
+
+  # ── modular service generation ──────────────────────────────────────
+
+  nix-modular-service = let
+    svc = nixcfgLib.mkModularService {
+      schema = ../examples/mycel.json;
+      naming = "snake_case";
+      mkArgv = cfg: [
+        "mycel"
+        "--data-dir" cfg.data_dir
+        "--model" cfg.model
+      ];
+    };
+    # evaluate as a standalone module (without nixpkgs portable service infra)
+    # just check that the module function produces the right structure
+    mod = svc {
+      config = {
+        mycel = {
+          data_dir = "/var/lib/mycel";
+          model = "claude-sonnet-4-20250514";
+          log_level = "info";
+          cache_warming = false;
+          discord_token_path = "/run/secrets/token";
+          anthropic_key_path = null;
+          package = pkgs.hello;
+        };
+      };
+      options = {};
+      lib = lib;
+    };
+  in
+    assert mod._class == "service";
+    assert mod ? options;
+    assert mod.options ? mycel;
+    assert mod.options.mycel ? data_dir;
+    assert mod.options.mycel ? package;
+    assert mod.config.process.argv == ["mycel" "--data-dir" "/var/lib/mycel" "--model" "claude-sonnet-4-20250514"];
+      ok "modular-service";
 }

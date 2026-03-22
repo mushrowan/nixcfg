@@ -1,4 +1,9 @@
-# nixcfg - generate NixOS module options from a language-agnostic schema
+# nixcfg - generate NixOS module options from JSON Schema
+#
+# consumes standard JSON Schema (draft 2020-12) with nixcfg extensions:
+#   x-nixcfg-name:   service/program name
+#   x-nixcfg-secret: marks a field as a secret (type → path, name gets _path suffix)
+#   x-nixcfg-port:   marks an integer as a port (type → types.port)
 {lib}: let
   # -- name conversions --
 
@@ -23,125 +28,189 @@
     "SCREAMING_SNAKE_CASE" = snakeToScreaming;
   }.${naming} or (throw "nixcfg: unknown naming convention '${naming}', expected one of: camelCase, snake_case, kebab-case, SCREAMING_SNAKE_CASE");
 
-  # -- type helpers --
+  # -- $ref resolution --
 
-  isOptionalType = type:
-    builtins.isAttrs type && type ? optional;
+  # resolve a $ref string like "#/$defs/Foo" against the root schema
+  resolveRef = root: ref: let
+    # strip leading "#/"
+    path = lib.splitString "/" (lib.removePrefix "#/" ref);
+  in
+    lib.getAttrFromPath path root;
 
-  # the "leaf" type for special-casing bools/lists in config generation
-  leafType = type:
-    if builtins.isString type
-    then type
-    else if type ? optional
-    then leafType type.optional
-    else "complex";
+  # -- type mapping --
 
-  # map a schema type to a nix type
-  # toNixName is threaded through so submodule children use the same naming
-  mapType = toNixName: type:
-    if builtins.isString type
+  # map a JSON Schema property to a nix type
+  # root: the full schema (for $ref resolution)
+  # toNixName: naming transform function
+  # prop: the property schema object
+  mapType = root: toNixName: prop: let
+    # resolve $ref first (merge with any sibling properties like description)
+    resolved =
+      if prop ? "$ref"
+      then (resolveRef root prop."$ref") // (builtins.removeAttrs prop ["$ref"])
+      else prop;
+
+    type = resolved.type or null;
+    isPort = resolved."x-nixcfg-port" or false;
+  in
+    # nullable type: ["string", "null"] or ["integer", "null"] etc
+    if builtins.isList type
+    then let
+      nonNull = builtins.filter (t: t != "null") type;
+      inner = mapType root toNixName (resolved // {type = builtins.head nonNull;});
+    in lib.types.nullOr inner
+
+    # port override
+    else if isPort
+    then lib.types.port
+
+    # simple types
+    else if type == "string" && resolved ? enum
+    then lib.types.enum resolved.enum
+    else if type == "string"
+    then lib.types.str
+    else if type == "boolean"
+    then lib.types.bool
+    else if type == "integer"
     then
-      {
-        "string" = lib.types.str;
-        "bool" = lib.types.bool;
-        "int" = lib.types.int;
-        "uint" = lib.types.ints.unsigned;
-        "path" = lib.types.path;
-        "port" = lib.types.port;
-      }
-      .${type}
-      or (throw "nixcfg: unknown simple type '${type}'")
-    else if type ? optional
-    then lib.types.nullOr (mapType toNixName type.optional)
-    else if type ? list
-    then lib.types.listOf (mapType toNixName type.list)
-    else if type ? attrs
-    then lib.types.attrsOf (mapType toNixName type.attrs)
-    else if type ? enum
-    then lib.types.enum type.enum
-    else if type ? submodule
-    then lib.types.submodule {options = mapOptions toNixName type.submodule {};}
-    else throw "nixcfg: unknown type ${builtins.toJSON type}";
+      if resolved ? minimum && resolved.minimum == 0
+      then lib.types.ints.unsigned
+      else lib.types.int
+
+    # array
+    else if type == "array"
+    then lib.types.listOf (mapType root toNixName (resolved.items or {type = "string";}))
+
+    # object with properties → submodule
+    else if type == "object" && resolved ? properties
+    then lib.types.submodule {
+      options = mapProperties root toNixName resolved {};
+    }
+
+    # object with additionalProperties → attrsOf
+    else if type == "object" && resolved ? additionalProperties
+    then lib.types.attrsOf (mapType root toNixName resolved.additionalProperties)
+
+    # object (bare) → attrsOf str
+    else if type == "object"
+    then lib.types.attrsOf lib.types.str
+
+    # anyOf: typically nullable refs like [{$ref: ...}, {type: "null"}]
+    else if resolved ? anyOf
+    then let
+      variants = resolved.anyOf;
+      nullVariants = builtins.filter (v: (v.type or null) == "null") variants;
+      nonNull = builtins.filter (v: (v.type or null) != "null") variants;
+      isNullable = builtins.length nullVariants > 0;
+      inner =
+        if builtins.length nonNull == 1
+        then mapType root toNixName (builtins.head nonNull)
+        # multiple non-null variants: freeform
+        else lib.types.attrsOf lib.types.anything;
+    in
+      if isNullable
+      then lib.types.nullOr inner
+      else inner
+
+    # oneOf: string enums (all variants have const + type:string) or tagged unions
+    else if resolved ? oneOf
+    then let
+      variants = resolved.oneOf;
+      # check if this is a simple string enum (all variants are {const: "...", type: "string"})
+      isStringEnum = builtins.all (v:
+        v ? const && (v.type or null) == "string"
+      ) variants;
+    in
+      if isStringEnum
+      then lib.types.enum (map (v: v.const) variants)
+      else lib.types.attrsOf lib.types.anything
+
+    # fallback: try as string
+    else lib.types.str;
 
   # -- option generation --
 
-  # compute the nix attr name for a schema option
-  # the secret suffix style matches the naming convention:
-  #   camelCase  → discord_token → discordTokenPath
-  #   snake_case → discord_token → discord_token_path
-  nixNameFor = toNixName: name: opt:
-    if (opt.secret or false)
+  # compute the nix attr name for a schema property
+  nixNameFor = toNixName: name: prop:
+    if (prop."x-nixcfg-secret" or false)
     then toNixName "${name}_path"
     else toNixName name;
 
-  mapOption = toNixName: name: opt: override: let
-    isSecret = opt.secret or false;
-    isOptional = isOptionalType opt.type;
+  # map a single property to a nix option
+  mapProperty = root: toNixName: name: prop: override: let
+    # resolve $ref
+    resolved =
+      if prop ? "$ref"
+      then (resolveRef root prop."$ref") // (builtins.removeAttrs prop ["$ref"])
+      else prop;
 
-    nixName = nixNameFor toNixName name opt;
+    isSecret = resolved."x-nixcfg-secret" or false;
+    type = resolved.type or null;
+    isNullable =
+      (builtins.isList type && builtins.elem "null" type)
+      || (resolved ? anyOf && builtins.any (v: (v.type or null) == "null") resolved.anyOf);
+
+    nixName = nixNameFor toNixName name resolved;
 
     nixType =
       if isSecret
       then
-        (
-          if isOptional
-          then lib.types.nullOr lib.types.path
-          else lib.types.path
-        )
-      else mapType toNixName opt.type;
+        (if isNullable
+         then lib.types.nullOr lib.types.path
+         else lib.types.path)
+      else mapType root toNixName resolved;
 
-    baseDesc = opt.description or "";
+    baseDesc = resolved.description or "";
     nixDesc =
       if isSecret
       then "path to file containing ${baseDesc}"
       else baseDesc;
 
-    isSubmodule = opt.type ? submodule;
-
-    isList = opt.type ? list;
-    isAttrs = opt.type ? attrs;
+    # determine if this is a structural type for default computation
+    resolvedType = resolved.type or null;
+    isObject = resolvedType == "object";
+    isArray = resolvedType == "array";
 
     nixDefault =
-      if isSecret && isOptional
+      if isSecret && isNullable
       then {default = null;}
       else if isSecret
       then {}
-      else if opt ? default
-      then {default = opt.default;}
-      else if isOptional
+      else if resolved ? default
+      then {default = resolved.default;}
+      else if isNullable
       then {default = null;}
-      else if isSubmodule
+      else if isObject && resolved ? properties
       then {default = {};}
-      else if isList
+      else if isArray
       then {default = [];}
-      else if isAttrs
+      else if isObject
       then {default = {};}
       else {};
+
     baseArgs =
-      {
-        type = nixType;
-      }
+      {type = nixType;}
       // lib.optionalAttrs (nixDesc != "") {description = nixDesc;}
       // nixDefault
-      // lib.optionalAttrs (opt ? example && !isSecret) {example = opt.example;};
+      // lib.optionalAttrs (resolved ? examples && !isSecret) {
+        example = builtins.head resolved.examples;
+      };
 
-    # merge override attrs on top of generated args
     finalArgs = baseArgs // override;
   in {
     ${nixName} = lib.mkOption finalArgs;
   };
 
-  mapOptions = toNixName: options: overrides:
+  # map all properties in a schema object to nix options
+  mapProperties = root: toNixName: schema: overrides:
     lib.foldl' (acc: name:
-      acc // mapOption toNixName name options.${name} (overrides.${name} or {})
-    ) {} (builtins.attrNames options);
+      acc // mapProperty root toNixName name schema.properties.${name} (overrides.${name} or {})
+    ) {} (builtins.attrNames (schema.properties or {}));
 
   # -- public: option generation --
 
-  optionsFromSchema = {naming ? "camelCase"}: schema: let
-    _ = assert schema.version == 1; null;
-  in
-    mapOptions (namingTransform naming) schema.options {};
+  optionsFromSchema = {naming ? "camelCase"}: schema:
+    mapProperties schema (namingTransform naming) schema {};
 
   optionsFromFile = {naming ? "camelCase"}: path:
     optionsFromSchema {inherit naming;} (builtins.fromJSON (builtins.readFile path));
@@ -157,39 +226,38 @@
     extraOverrides ? {},
   }: let
     parsed =
-      if builtins.isAttrs schema && schema ? version
+      if builtins.isAttrs schema && schema ? properties
       then schema
       else builtins.fromJSON (builtins.readFile schema);
 
     toNixName = namingTransform naming;
+    name = parsed."x-nixcfg-name" or parsed.title or "unknown";
 
-    # validate override keys exist in schema
+    # validate override keys exist in schema properties
     unknownOverrides = builtins.filter
-      (k: !(parsed.options ? ${k}))
+      (k: !(parsed.properties ? ${k}))
       (builtins.attrNames overrides);
     validation =
       if unknownOverrides != []
       then builtins.throw "nixcfg: override keys not found in schema: ${builtins.concatStringsSep ", " unknownOverrides}. use extraOverrides for non-schema options"
       else true;
 
-    opts = builtins.seq validation (mapOptions toNixName parsed.options overrides);
+    opts = builtins.seq validation (mapProperties parsed toNixName parsed overrides);
 
-    # extraOverrides are added as-is (keys used directly as option names)
     extraOpts = lib.mapAttrs (_: attrs: lib.mkOption attrs) extraOverrides;
 
-    optionPath = prefix ++ [parsed.name];
+    optionPath = prefix ++ [name];
 
-    # schema options go either flat or nested under settingsAttr
     schemaOpts = opts // extraOpts;
     topLevel =
-      {enable = lib.mkEnableOption (parsed.description or parsed.name);}
+      {enable = lib.mkEnableOption (parsed.description or name);}
       // (
         if settingsAttr != null
         then {
           ${settingsAttr} = lib.mkOption {
             type = lib.types.submodule {options = schemaOpts;};
             default = {};
-            description = "configuration options for ${parsed.name}";
+            description = "configuration options for ${name}";
           };
         }
         else schemaOpts
@@ -199,97 +267,173 @@
       options = lib.setAttrByPath optionPath topLevel;
     };
 
+  # generate a config file derivation from a schema and settings attrset
+  #
+  # returns a derivation (store path) for the generated config file.
+  # filters out null, empty lists, and empty attrs before serialisation
+  #
+  # usage: mkConfigFile { inherit pkgs schema; settings = cfg.settings; }
+  mkConfigFile = {
+    pkgs,
+    schema,
+    settings,
+  }: let
+    parsed =
+      if builtins.isAttrs schema && schema ? properties
+      then schema
+      else builtins.fromJSON (builtins.readFile schema);
+
+    configFormat = parsed."x-nixcfg-config-format" or
+      (builtins.throw "nixcfg: mkConfigFile requires x-nixcfg-config-format in schema");
+    name = parsed."x-nixcfg-name" or parsed.title or "config";
+
+    filterSettings = s:
+      lib.filterAttrsRecursive (
+        _: v: v != null && !(builtins.isList v && v == []) && !(builtins.isAttrs v && v == {})
+      ) s;
+
+    fmt = {
+      "toml" = pkgs.formats.toml {};
+      "json" = pkgs.formats.json {};
+      "yaml" = pkgs.formats.yaml {};
+    }.${configFormat} or (builtins.throw "nixcfg: unknown config format '${configFormat}', expected one of: toml, json, yaml");
+  in
+    fmt.generate "${name}-config.${configFormat}" (filterSettings settings);
+
   # -- public: config conversion helpers --
 
+  # helper to check if a property is nullable
+  propIsNullable = prop: let
+    type = prop.type or null;
+  in
+    (builtins.isList type && builtins.elem "null" type)
+    || (prop ? anyOf && builtins.any (v: (v.type or null) == "null") prop.anyOf);
+
+  # determine the "leaf type" for a property (for bool/list special handling)
+  leafType = root: prop: let
+    resolved =
+      if prop ? "$ref"
+      then (resolveRef root prop."$ref") // (builtins.removeAttrs prop ["$ref"])
+      else prop;
+    type = resolved.type or null;
+  in
+    if builtins.isList type
+    then leafType root (resolved // {type = builtins.head (builtins.filter (t: t != "null") type);})
+    else if resolved ? anyOf then "scalar"
+    else if resolved ? oneOf then "scalar"
+    else if type == "boolean" then "bool"
+    else if type == "array" then "list"
+    else if type == "object" && resolved ? properties then "submodule"
+    else if type == "object" then "attrs"
+    else "scalar";
+
   toCliArgs = {naming ? "camelCase", output ? "kebab-case"}: schema: cfg: let
+    parsed =
+      if builtins.isAttrs schema && schema ? properties
+      then schema
+      else builtins.fromJSON (builtins.readFile schema);
     toNixName = namingTransform naming;
     toOutput = namingTransform output;
-    outputName = name: opt:
-      let isSecret = opt.secret or false;
+    outputName = name: prop:
+      let isSecret = prop."x-nixcfg-secret" or false;
       in toOutput (if isSecret then "${name}_path" else name);
   in
     lib.concatLists (lib.mapAttrsToList (
-        name: opt: let
-          isSecret = opt.secret or false;
-          nixName = nixNameFor toNixName name opt;
-          flag = "--${outputName name opt}";
+        name: prop: let
+          resolved =
+            if prop ? "$ref"
+            then (resolveRef parsed prop."$ref") // (builtins.removeAttrs prop ["$ref"])
+            else prop;
+          isSecret = resolved."x-nixcfg-secret" or false;
+          nixName = nixNameFor toNixName name resolved;
+          flag = "--${outputName name resolved}";
           value = cfg.${nixName} or null;
-          leaf = leafType opt.type;
+          leaf = leafType parsed resolved;
         in
           if value == null
           then []
-          # submodules and attrs don't have a CLI representation
-          else if opt.type ? submodule || opt.type ? attrs
+          else if leaf == "submodule" || leaf == "attrs"
           then []
           else if isSecret
           then [flag (toString value)]
           else if leaf == "bool"
           then lib.optional value flag
-          else if opt.type ? list
+          else if leaf == "list"
           then lib.concatMap (v: [flag (toString v)]) value
           else [flag (toString value)]
       )
-      schema.options);
+      (parsed.properties or {}));
 
   toEnvVars = {naming ? "camelCase", output ? "SCREAMING_SNAKE_CASE"}: schema: cfg: let
+    parsed =
+      if builtins.isAttrs schema && schema ? properties
+      then schema
+      else builtins.fromJSON (builtins.readFile schema);
     toNixName = namingTransform naming;
     toOutput = namingTransform output;
   in
     lib.foldl' (
       acc: name: let
-        opt = schema.options.${name};
-        isSecret = opt.secret or false;
-        nixName = nixNameFor toNixName name opt;
-        envName = toOutput (
-          if isSecret
-          then "${name}_path"
-          else name
-        );
+        prop = parsed.properties.${name};
+        resolved =
+          if prop ? "$ref"
+          then (resolveRef parsed prop."$ref") // (builtins.removeAttrs prop ["$ref"])
+          else prop;
+        isSecret = resolved."x-nixcfg-secret" or false;
+        nixName = nixNameFor toNixName name resolved;
+        envName = toOutput (if isSecret then "${name}_path" else name);
         value = cfg.${nixName} or null;
-        leaf = leafType opt.type;
+        leaf = leafType parsed resolved;
       in
         if value == null
         then acc
         else if leaf == "bool"
         then acc // {${envName} = lib.boolToString value;}
-        else if opt.type ? list
+        else if leaf == "list"
         then acc // {${envName} = lib.concatMapStringsSep "," toString value;}
         else acc // {${envName} = toString value;}
-    ) {} (builtins.attrNames schema.options);
+    ) {} (builtins.attrNames (parsed.properties or {}));
 
   toConfigAttrs = {naming ? "camelCase", output ? "snake_case"}: schema: cfg: let
+    parsed =
+      if builtins.isAttrs schema && schema ? properties
+      then schema
+      else builtins.fromJSON (builtins.readFile schema);
     toNixName = namingTransform naming;
     toOutput = namingTransform output;
   in
     lib.foldl' (
       acc: name: let
-        opt = schema.options.${name};
-        isSecret = opt.secret or false;
-        nixName = nixNameFor toNixName name opt;
-        attrName = toOutput (
-          if isSecret
-          then "${name}_path"
-          else name
-        );
+        prop = parsed.properties.${name};
+        resolved =
+          if prop ? "$ref"
+          then (resolveRef parsed prop."$ref") // (builtins.removeAttrs prop ["$ref"])
+          else prop;
+        isSecret = resolved."x-nixcfg-secret" or false;
+        nixName = nixNameFor toNixName name resolved;
+        attrName = toOutput (if isSecret then "${name}_path" else name);
         value = cfg.${nixName} or null;
       in
         if value == null
         then acc
         else acc // {${attrName} = value;}
-    ) {} (builtins.attrNames schema.options);
+    ) {} (builtins.attrNames (parsed.properties or {}));
 
   debugLib = import ./debug.nix {inherit lib nixcfgLib;};
+  fromOptionsLib = import ./from-options.nix {inherit lib;};
+  modularServiceLib = import ./modular-service.nix {inherit lib nixcfgLib;};
 
   nixcfgLib = {
     inherit
       optionsFromSchema
       optionsFromFile
       mkModule
+      mkConfigFile
       toCliArgs
       toEnvVars
       toConfigAttrs
       mapType
-      mapOptions
+      mapProperties
       namingTransform
       snakeToCamel
       snakeToKebab
@@ -297,12 +441,20 @@
       nixNameFor
       ;
 
-    # pure debug helpers (no pkgs needed)
+    # nix driver: generate JSON Schema from nix module options
+    inherit (fromOptionsLib)
+      schemaFromOptions
+      schemaFromModule
+      typeToSchema
+      optionsToProperties
+      ;
+
+    # modular services (nixpkgs system.services)
+    inherit (modularServiceLib) mkModularService;
+
     inherit (debugLib) fmtSchema;
 
-    # create a pkgs-bound lib (like crane.mkLib)
     mkLib = pkgs: nixcfgLib // {
-      # debug app that pretty-prints a schema as nix options
       mkDebugApp = {schema, naming ? "camelCase"}: debugLib.mkDebugApp {inherit schema pkgs naming;};
     };
   };

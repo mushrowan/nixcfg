@@ -4,7 +4,7 @@ generate NixOS module options from your program's config types. define your
 config once, get typed nix options automatically.
 
 ```
-config struct ──→ language driver ──→ schema.json ──→ nix lib ──→ mkOption defs
+config struct ──→ JSON Schema ──→ nix lib ──→ mkOption defs
 ```
 
 ## dilemma
@@ -42,31 +42,37 @@ config struct ──→ language driver ──→ schema.json ──→ nix lib 
 The goal of NixCfg is:  
 **the program == the source of truth for its nix module options**
 
-## quick example (rust driver)
+## quick example (rust)
 
 ```rust
-use nixcfg::NixCfg;
+use schemars::JsonSchema;
+use serde::Serialize;
 
-#[derive(NixCfg)]
+#[derive(JsonSchema, Serialize)]
 enum LogLevel { Trace, Debug, Info, Warn, Error }
 
-#[derive(NixCfg)]
+#[derive(JsonSchema, Serialize)]
 struct Config {
     /// data directory
-    #[nixcfg(default = "/var/lib/myapp")]
-    data_dir: PathBuf,
+    #[serde(default = "default_data_dir")]
+    data_dir: String,
 
     /// log level
-    #[nixcfg(default = "info")]
     log_level: LogLevel,
 
     /// discord bot token
-    #[nixcfg(secret)]
+    #[schemars(extend("x-nixcfg-secret" = true))]
     token: String,
 }
 ```
 
-consume in nix:
+emit the schema and consume in nix:
+
+```rust
+use nixcfg::NixSchema;
+let schema = NixSchema::from::<Config>("myapp");
+println!("{}", schema.to_json_pretty());
+```
 
 ```nix
 {
@@ -77,28 +83,27 @@ consume in nix:
 
 # produces:
 # services.myapp.enable
-# services.myapp.dataDir        (path, default "/var/lib/myapp")
-# services.myapp.logLevel       (enum, default "info")
+# services.myapp.dataDir        (str, default "/var/lib/myapp")
+# services.myapp.logLevel       (enum)
 # services.myapp.tokenPath      (path, secret)
 ```
 
 ## how it works
 
-the JSON schema is the contract between your program and nix. any language that
-can emit the schema can use the nix library. see `schema/v1.md` for the full
-spec.
+the schema is standard [JSON Schema (draft 2020-12)](https://json-schema.org/draft/2020-12)
+with `x-nixcfg-*` extensions. any language that can emit JSON Schema can use
+the nix library. see `schema/v1.md` for the full spec.
 
-schema types: `string`, `bool`, `int`, `uint`, `path`, `port`, `optional`,
-`list`, `attrs`, `enum`, `submodule`
+nixcfg extensions:
 
-## drivers
+| extension | effect |
+|---|---|
+| `x-nixcfg-name` | service name for module path |
+| `x-nixcfg-secret` | field becomes a file path, name gets `_path` suffix |
+| `x-nixcfg-port` | integer becomes `types.port` |
 
-a driver is anything that emits the schema JSON from your config types.
-
-**rust** (`drivers/rust/`) - proc macro derive, as shown in the example above.
-
-more drivers (go, python, typescript) are planned. writing one is
-straightforward: emit JSON matching `schema/v1.md`.
+any language with a JSON Schema library (schemars for rust, jsonschema for
+python, etc.) can be a driver. no custom proc macros or code generation needed.
 
 ## nix lib
 
@@ -106,12 +111,12 @@ straightforward: emit JSON matching `schema/v1.md`.
 
 | function            | signature                                                                  |
 | ------------------- | -------------------------------------------------------------------------- |
-| `mkModule`          | `{ schema, naming?, prefix?, settingsAttr?, overrides?, extraOverrides? } → NixOS module` |
-| `optionsFromSchema` | `{ naming? } → schema → options`                                           |
-| `optionsFromFile`   | `{ naming? } → path → options`                                             |
-| `toCliArgs`         | `{ naming?, output? } → schema → cfg → [string]`                           |
-| `toEnvVars`         | `{ naming?, output? } → schema → cfg → attrset`                            |
-| `toConfigAttrs`     | `{ naming?, output? } → schema → cfg → attrset`                            |
+| `mkModule`          | `{ schema, naming?, prefix?, settingsAttr?, overrides?, extraOverrides? } -> NixOS module` |
+| `optionsFromSchema` | `{ naming? } -> schema -> options`                                           |
+| `optionsFromFile`   | `{ naming? } -> path -> options`                                             |
+| `toCliArgs`         | `{ naming?, output? } -> schema -> cfg -> [string]`                           |
+| `toEnvVars`         | `{ naming?, output? } -> schema -> cfg -> attrset`                            |
+| `toConfigAttrs`     | `{ naming?, output? } -> schema -> cfg -> attrset`                            |
 
 ### naming
 
@@ -166,20 +171,6 @@ inspect the generated module with `nix run .#debug`:
 
 ```nix
 apps.debug = (nixcfg.lib.mkLib pkgs).mkDebugApp { schema = ./schema.json; };
-```
-
-```
-$ nix run .#debug
-services.myapp = {
-  enable = mkEnableOption "myapp";
-
-  dataDir = mkOption {
-    type = types.path;
-    default = "/var/lib/myapp";
-    description = "data directory";
-  };
-  ...
-};
 ```
 
 ## checks
