@@ -67,11 +67,11 @@
 
   # compute the nix attr name for a schema option
   # the secret suffix style matches the naming convention:
-  #   camelCase  → discord_token → discordTokenFile
-  #   snake_case → discord_token → discord_token_file
+  #   camelCase  → discord_token → discordTokenPath
+  #   snake_case → discord_token → discord_token_path
   nixNameFor = toNixName: name: opt:
     if (opt.secret or false)
-    then toNixName "${name}_file"
+    then toNixName "${name}_path"
     else toNixName name;
 
   mapOption = toNixName: name: opt: override: let
@@ -206,7 +206,7 @@
     toOutput = namingTransform output;
     outputName = name: opt:
       let isSecret = opt.secret or false;
-      in toOutput (if isSecret then "${name}_file" else name);
+      in toOutput (if isSecret then "${name}_path" else name);
   in
     lib.concatLists (lib.mapAttrsToList (
         name: opt: let
@@ -242,7 +242,7 @@
         nixName = nixNameFor toNixName name opt;
         envName = toOutput (
           if isSecret
-          then "${name}_file"
+          then "${name}_path"
           else name
         );
         value = cfg.${nixName} or null;
@@ -268,7 +268,7 @@
         nixName = nixNameFor toNixName name opt;
         attrName = toOutput (
           if isSecret
-          then "${name}_file"
+          then "${name}_path"
           else name
         );
         value = cfg.${nixName} or null;

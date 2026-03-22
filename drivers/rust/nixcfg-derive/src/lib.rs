@@ -11,7 +11,9 @@ use syn::{Data, DeriveInput, Fields, Lit, Meta, parse_macro_input};
 ///
 /// ## field attributes
 ///
-/// - `#[nixcfg(secret)]` — mark as a secret (nix side becomes `*File` path)
+/// - `#[nixcfg(secret)]` — mark as a secret (nix option becomes `*_path`,
+///   type becomes `path`). any sibling field named `{name}_path` or
+///   `{name}_file` is automatically excluded to avoid collision
 /// - `#[nixcfg(port)]` — override type to `Port` (for u16 fields)
 /// - `#[nixcfg(default = <lit>)]` — set the default value
 /// - `#[nixcfg(example = <lit>)]` — set an example value
@@ -46,11 +48,34 @@ fn derive_struct(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream {
         _ => panic!("NixOptions only supports structs with named fields"),
     };
 
+    // collect secret field names so we can auto-skip their _path/_file siblings
+    let secret_names: std::collections::HashSet<String> = fields
+        .iter()
+        .filter_map(|field| {
+            let attrs = parse_field_attrs(&field.attrs);
+            if attrs.secret {
+                Some(field.ident.as_ref().unwrap().to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let option_entries: Vec<_> = fields
         .iter()
         .filter_map(|field| {
             let attrs = parse_field_attrs(&field.attrs);
             if attrs.skip || has_serde_skip(&field.attrs) {
+                return None;
+            }
+
+            // auto-skip fields that collide with a secret's generated _path name
+            let field_name = field.ident.as_ref().unwrap().to_string();
+            if let Some(base) = field_name
+                .strip_suffix("_path")
+                .or_else(|| field_name.strip_suffix("_file"))
+                && secret_names.contains(base)
+            {
                 return None;
             }
 

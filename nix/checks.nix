@@ -57,8 +57,8 @@
     model = "claude-sonnet-4-20250514";
     logLevel = "info";
     cacheWarming = true;
-    discordTokenFile = "/run/secrets/discord";
-    anthropicKeyFile = null;
+    discordTokenPath = "/run/secrets/discord";
+    anthropicKeyPath = null;
   };
 
   complexCfg = {
@@ -78,8 +78,8 @@
       name = "mydb";
       poolSize = 10;
     };
-    apiKeyFile = "/run/secrets/api";
-    dbPasswordFile = null;
+    apiKeyPath = "/run/secrets/api";
+    dbPasswordPath = null;
     allowedOrigins = ["https://example.com" "https://app.example.com"];
   };
 
@@ -112,25 +112,25 @@ in {
   # ── naming conventions ────────────────────────────────────────────
 
   nix-naming-camel = let
-    expected = ["anthropicKeyFile" "cacheWarming" "dataDir" "discordTokenFile" "logLevel" "model"];
+    expected = ["anthropicKeyPath" "cacheWarming" "dataDir" "discordTokenPath" "logLevel" "model"];
   in
     assert builtins.attrNames camelOpts == expected;
       ok "naming-camel";
 
   nix-naming-snake = let
-    expected = ["anthropic_key_file" "cache_warming" "data_dir" "discord_token_file" "log_level" "model"];
+    expected = ["anthropic_key_path" "cache_warming" "data_dir" "discord_token_path" "log_level" "model"];
   in
     assert builtins.attrNames snakeOpts == expected;
       ok "naming-snake";
 
   nix-naming-kebab = let
-    expected = ["anthropic-key-file" "cache-warming" "data-dir" "discord-token-file" "log-level" "model"];
+    expected = ["anthropic-key-path" "cache-warming" "data-dir" "discord-token-path" "log-level" "model"];
   in
     assert builtins.attrNames kebabOpts == expected;
       ok "naming-kebab";
 
   nix-naming-screaming = let
-    expected = ["ANTHROPIC_KEY_FILE" "CACHE_WARMING" "DATA_DIR" "DISCORD_TOKEN_FILE" "LOG_LEVEL" "MODEL"];
+    expected = ["ANTHROPIC_KEY_PATH" "CACHE_WARMING" "DATA_DIR" "DISCORD_TOKEN_PATH" "LOG_LEVEL" "MODEL"];
   in
     assert builtins.attrNames screamOpts == expected;
       ok "naming-screaming";
@@ -160,25 +160,25 @@ in {
     # nested optional list
     assert o.allowedOrigins.type.name == "nullOr";
     # secrets become path
-    assert o.apiKeyFile.type.name == "path";
+    assert o.apiKeyPath.type.name == "path";
     # optional secret becomes nullOr path
-    assert o.dbPasswordFile.type.name == "nullOr";
+    assert o.dbPasswordPath.type.name == "nullOr";
       ok "types";
 
   # ── secrets ───────────────────────────────────────────────────────
 
   nix-secrets =
     # file suffix applied
-    assert complexOpts ? apiKeyFile;
-    assert complexOpts ? dbPasswordFile;
+    assert complexOpts ? apiKeyPath;
+    assert complexOpts ? dbPasswordPath;
     assert !(complexOpts ? apiKey);
     assert !(complexOpts ? dbPassword);
     # optional secret defaults to null
-    assert complexOpts.dbPasswordFile.default == null;
+    assert complexOpts.dbPasswordPath.default == null;
     # required secret has no default
-    assert !(complexOpts.apiKeyFile ? default);
+    assert !(complexOpts.apiKeyPath ? default);
     # description prefixed
-    assert lib.hasPrefix "path to file containing" complexOpts.apiKeyFile.description;
+    assert lib.hasPrefix "path to file containing" complexOpts.apiKeyPath.description;
       ok "secrets";
 
   # ── defaults ──────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ in {
   nix-module-simple =
     assert simpleModOpts ? enable;
     assert simpleModOpts ? dataDir;
-    assert simpleModOpts ? discordTokenFile;
+    assert simpleModOpts ? discordTokenPath;
     assert simpleModOpts ? logLevel;
       ok "module-simple";
 
@@ -209,7 +209,7 @@ in {
     assert complexModOpts ? hostname;
     assert complexModOpts ? port;
     assert complexModOpts ? database;
-    assert complexModOpts ? apiKeyFile;
+    assert complexModOpts ? apiKeyPath;
     assert complexModOpts ? tags;
     assert complexModOpts ? allowedOrigins;
       ok "module-complex";
@@ -226,8 +226,8 @@ in {
     assert hasPair simpleCli "--model" "claude-sonnet-4-20250514";
     assert hasPair simpleCli "--log-level" "info";
     assert hasFlag simpleCli "--cache-warming";
-    assert hasPair simpleCli "--discord-token-file" "/run/secrets/discord";
-    assert lacksFlag simpleCli "--anthropic-key-file";
+    assert hasPair simpleCli "--discord-token-path" "/run/secrets/discord";
+    assert lacksFlag simpleCli "--anthropic-key-path";
       ok "cli-simple";
 
   nix-cli-complex =
@@ -236,10 +236,10 @@ in {
     assert hasFlag complexCli "--debug";
     assert hasPair complexCli "--workers" "8";
     assert hasPair complexCli "--max-retries" "-1";
-    assert hasPair complexCli "--api-key-file" "/run/secrets/api";
+    assert hasPair complexCli "--api-key-path" "/run/secrets/api";
     # null values omitted
     assert lacksFlag complexCli "--optional-feature";
-    assert lacksFlag complexCli "--db-password-file";
+    assert lacksFlag complexCli "--db-password-path";
     # list values repeat the flag
     assert hasPair complexCli "--tags" "web";
     assert hasPair complexCli "--tags" "prod";
@@ -257,7 +257,7 @@ in {
     args = nixcfgLib.toCliArgs {output = "snake_case";} simple simpleCfg;
   in
     assert hasPair args "--data_dir" "/var/lib/mycel";
-    assert hasPair args "--discord_token_file" "/run/secrets/discord";
+    assert hasPair args "--discord_token_path" "/run/secrets/discord";
       ok "cli-output-naming";
 
   # ── env vars ──────────────────────────────────────────────────────
@@ -266,8 +266,8 @@ in {
     assert simpleEnv.DATA_DIR == "/var/lib/mycel";
     assert simpleEnv.MODEL == "claude-sonnet-4-20250514";
     assert simpleEnv.CACHE_WARMING == "true";
-    assert simpleEnv.DISCORD_TOKEN_FILE == "/run/secrets/discord";
-    assert !(simpleEnv ? ANTHROPIC_KEY_FILE);
+    assert simpleEnv.DISCORD_TOKEN_PATH == "/run/secrets/discord";
+    assert !(simpleEnv ? ANTHROPIC_KEY_PATH);
       ok "env-simple";
 
   nix-env-complex =
@@ -275,8 +275,8 @@ in {
     assert complexEnv.PORT == "9090";
     assert complexEnv.DEBUG == "true";
     assert complexEnv.WORKERS == "8";
-    assert complexEnv.API_KEY_FILE == "/run/secrets/api";
-    assert !(complexEnv ? DB_PASSWORD_FILE);
+    assert complexEnv.API_KEY_PATH == "/run/secrets/api";
+    assert !(complexEnv ? DB_PASSWORD_PATH);
     assert !(complexEnv ? OPTIONAL_FEATURE);
     # list is comma-separated
     assert complexEnv.TAGS == "web,prod";
@@ -288,7 +288,7 @@ in {
   in
     assert env ? data-dir;
     assert env.data-dir == "/var/lib/mycel";
-    assert env ? discord-token-file;
+    assert env ? discord-token-path;
       ok "env-output-naming";
 
   # ── config attrs ──────────────────────────────────────────────────
@@ -297,8 +297,8 @@ in {
     assert simpleConfig.data_dir == "/var/lib/mycel";
     assert simpleConfig.model == "claude-sonnet-4-20250514";
     assert simpleConfig.cache_warming == true;
-    assert simpleConfig.discord_token_file == "/run/secrets/discord";
-    assert !(simpleConfig ? anthropic_key_file);
+    assert simpleConfig.discord_token_path == "/run/secrets/discord";
+    assert !(simpleConfig ? anthropic_key_path);
       ok "config-simple";
 
   nix-config-complex =
@@ -308,8 +308,8 @@ in {
     assert complexConfig.workers == 8;
     assert complexConfig.max_retries == (-1);
     assert complexConfig.tags == ["web" "prod"];
-    assert complexConfig.api_key_file == "/run/secrets/api";
-    assert !(complexConfig ? db_password_file);
+    assert complexConfig.api_key_path == "/run/secrets/api";
+    assert !(complexConfig ? db_password_path);
     assert !(complexConfig ? optional_feature);
       ok "config-complex";
 
@@ -319,7 +319,7 @@ in {
   in
     assert cfg ? dataDir;
     assert cfg.dataDir == "/var/lib/mycel";
-    assert cfg ? discordTokenFile;
+    assert cfg ? discordTokenPath;
       ok "config-output-naming";
 
   # ── overrides ─────────────────────────────────────────────────────
@@ -361,8 +361,8 @@ in {
       model = "claude-sonnet-4-20250514";
       log_level = "info";
       cache_warming = true;
-      discord_token_file = "/run/secrets/discord";
-      anthropic_key_file = null;
+      discord_token_path = "/run/secrets/discord";
+      anthropic_key_path = null;
     };
 
     cli = nixcfgLib.toCliArgs {naming = "snake_case";} simple snakeCfg;
@@ -371,7 +371,7 @@ in {
   in
     # module options use snake_case
     assert snakeModOpts ? data_dir;
-    assert snakeModOpts ? discord_token_file;
+    assert snakeModOpts ? discord_token_path;
     assert !(snakeModOpts ? dataDir);
     # CLI still defaults to kebab-case output
     assert hasPair cli "--data-dir" "/var/lib/mycel";

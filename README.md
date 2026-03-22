@@ -79,7 +79,7 @@ consume in nix:
 # services.myapp.enable
 # services.myapp.dataDir        (path, default "/var/lib/myapp")
 # services.myapp.logLevel       (enum, default "info")
-# services.myapp.tokenFile      (path, secret)
+# services.myapp.tokenPath      (path, secret)
 ```
 
 ## how it works
