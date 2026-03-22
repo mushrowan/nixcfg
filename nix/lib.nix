@@ -98,6 +98,9 @@
 
     isSubmodule = opt.type ? submodule;
 
+    isList = opt.type ? list;
+    isAttrs = opt.type ? attrs;
+
     nixDefault =
       if isSecret && isOptional
       then {default = null;}
@@ -108,6 +111,10 @@
       else if isOptional
       then {default = null;}
       else if isSubmodule
+      then {default = {};}
+      else if isList
+      then {default = [];}
+      else if isAttrs
       then {default = {};}
       else {};
     baseArgs =
