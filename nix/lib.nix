@@ -37,7 +37,8 @@
     else "complex";
 
   # map a schema type to a nix type
-  mapType = type:
+  # toNixName is threaded through so submodule children use the same naming
+  mapType = toNixName: type:
     if builtins.isString type
     then
       {
@@ -51,15 +52,15 @@
       .${type}
       or (throw "nixcfg: unknown simple type '${type}'")
     else if type ? optional
-    then lib.types.nullOr (mapType type.optional)
+    then lib.types.nullOr (mapType toNixName type.optional)
     else if type ? list
-    then lib.types.listOf (mapType type.list)
+    then lib.types.listOf (mapType toNixName type.list)
     else if type ? attrs
-    then lib.types.attrsOf (mapType type.attrs)
+    then lib.types.attrsOf (mapType toNixName type.attrs)
     else if type ? enum
     then lib.types.enum type.enum
     else if type ? submodule
-    then lib.types.submodule {options = mapOptions snakeToCamel type.submodule {};}
+    then lib.types.submodule {options = mapOptions toNixName type.submodule {};}
     else throw "nixcfg: unknown type ${builtins.toJSON type}";
 
   # -- option generation --
@@ -87,7 +88,7 @@
           then lib.types.nullOr lib.types.path
           else lib.types.path
         )
-      else mapType opt.type;
+      else mapType toNixName opt.type;
 
     baseDesc = opt.description or "";
     nixDesc =
