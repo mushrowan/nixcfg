@@ -3,14 +3,17 @@
 //! use `#[derive(JsonSchema)]` from schemars with `#[schemars(extend(...))]`
 //! to annotate fields with nixcfg extensions:
 //!
-//! - `#[schemars(extend("x-nixcfg-secret" = true))]` — secret field
-//! - `#[schemars(extend("x-nixcfg-port" = true))]` — port type
+//! - `#[schemars(extend("x-nixcfg-secret" = true))]` for secret fields
+//! - `#[schemars(extend("x-nixcfg-port" = true))]` for port types
 //!
 //! then emit the schema with `NixSchema::from::<T>("name")`
 
 pub use schemars;
 pub use schemars::JsonSchema;
 pub use serde_json;
+
+// re-export the nixcfg attribute macro for ergonomic use
+pub use nixcfg_derive::nixcfg;
 
 /// wraps a schemars-generated JSON Schema with nixcfg metadata
 #[derive(Debug, Clone)]
@@ -241,5 +244,140 @@ mod tests {
         // log_level should reference LogLevel enum via $ref or inline
         // the exact shape depends on schemars, but it should exist
         assert!(json["properties"]["log_level"].is_object());
+    }
+
+    // ── nixcfg attribute macro ────────────────────────────────────
+
+    #[crate::nixcfg]
+    #[derive(JsonSchema, Serialize)]
+    #[allow(dead_code)]
+    struct MacroConfig {
+        /// api key
+        #[nixcfg(secret)]
+        api_key: String,
+
+        /// listen port
+        #[nixcfg(port)]
+        listen_port: u16,
+
+        /// state dir
+        #[nixcfg(path)]
+        data_dir: String,
+
+        /// runtime-only
+        #[nixcfg(skip)]
+        runtime_handle: String,
+
+        /// combined secret path
+        #[nixcfg(secret, path)]
+        pem_path: String,
+
+        /// override description and example
+        #[nixcfg(
+            description = "long prose description for nix option docs",
+            example = "/var/lib/app"
+        )]
+        hooks_cwd: String,
+    }
+
+    #[test]
+    fn macro_rewrites_flags() {
+        let schema = NixSchema::from::<MacroConfig>("macro-test");
+        let json: serde_json::Value = serde_json::from_str(&schema.to_json_pretty()).unwrap();
+
+        assert_eq!(
+            json["properties"]["api_key"]["x-nixcfg-secret"], true,
+            "secret flag should be emitted"
+        );
+        assert_eq!(
+            json["properties"]["listen_port"]["x-nixcfg-port"], true,
+            "port flag should be emitted"
+        );
+        assert_eq!(
+            json["properties"]["data_dir"]["x-nixcfg-path"], true,
+            "path flag should be emitted"
+        );
+        assert_eq!(
+            json["properties"]["runtime_handle"]["x-nixcfg-skip"], true,
+            "skip flag should be emitted"
+        );
+    }
+
+    #[test]
+    fn macro_combines_flags() {
+        let schema = NixSchema::from::<MacroConfig>("macro-test");
+        let json: serde_json::Value = serde_json::from_str(&schema.to_json_pretty()).unwrap();
+
+        assert_eq!(json["properties"]["pem_path"]["x-nixcfg-secret"], true);
+        assert_eq!(json["properties"]["pem_path"]["x-nixcfg-path"], true);
+    }
+
+    #[test]
+    fn macro_key_value_pairs() {
+        let schema = NixSchema::from::<MacroConfig>("macro-test");
+        let json: serde_json::Value = serde_json::from_str(&schema.to_json_pretty()).unwrap();
+
+        assert_eq!(
+            json["properties"]["hooks_cwd"]["x-nixcfg-description"],
+            "long prose description for nix option docs"
+        );
+        assert_eq!(
+            json["properties"]["hooks_cwd"]["x-nixcfg-example"],
+            "/var/lib/app"
+        );
+    }
+
+    // ── schema_with escape hatch ──────────────────────────────────
+    //
+    // verifies the pattern used for foreign types that can't (or shouldn't)
+    // impl JsonSchema locally: hand-roll the schema fragment including any
+    // x-nixcfg-* extensions, hook it up via #[schemars(schema_with = ...)].
+    // nixcfg reads the resulting schema the same way it reads any other.
+
+    // a foreign type we don't want (or can't) derive JsonSchema on
+    #[derive(Serialize, Default)]
+    #[allow(dead_code)]
+    struct OpaqueForeign {
+        host: String,
+    }
+
+    fn opaque_schema(_g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "host": { "type": "string" }
+            },
+            "x-nixcfg-skip": true,
+            "description": "provided via schema_with"
+        }))
+        .unwrap()
+    }
+
+    #[derive(JsonSchema, Serialize)]
+    #[allow(dead_code)]
+    struct ContainerWithOpaque {
+        /// normal field
+        name: String,
+
+        // no doc comment here: schemars would apply it as the field description,
+        // overriding whatever the schema_with function produces. leaving it off
+        // lets the hand-rolled schema's own description win
+        #[schemars(schema_with = "opaque_schema")]
+        opaque: OpaqueForeign,
+    }
+
+    #[test]
+    fn schema_with_round_trips_extensions() {
+        let schema = NixSchema::from::<ContainerWithOpaque>("schema-with-test");
+        let json: serde_json::Value = serde_json::from_str(&schema.to_json_pretty()).unwrap();
+
+        // extension from the hand-rolled fragment lands in the schema
+        assert_eq!(json["properties"]["opaque"]["x-nixcfg-skip"], true);
+        assert_eq!(
+            json["properties"]["opaque"]["description"],
+            "provided via schema_with"
+        );
+        // normal derived field is untouched
+        assert_eq!(json["properties"]["name"]["type"], "string");
     }
 }

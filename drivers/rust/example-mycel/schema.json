@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "LogLevel": {
+      "enum": [
+        "trace",
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "mycel discord bot configuration",
+  "properties": {
+    "anthropic_key": {
+      "description": "anthropic API key (not needed with OAuth)",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-nixcfg-secret": true
+    },
+    "cache_warming": {
+      "default": false,
+      "description": "keep the prompt cache warm between messages",
+      "type": "boolean"
+    },
+    "data_dir": {
+      "default": "/var/lib/mycel",
+      "description": "directory for the database, models, and workspace",
+      "type": "string"
+    },
+    "discord_token": {
+      "description": "discord bot token",
+      "type": "string",
+      "x-nixcfg-secret": true
+    },
+    "log_level": {
+      "$ref": "#/$defs/LogLevel",
+      "default": "info",
+      "description": "log level"
+    },
+    "model": {
+      "default": "claude-sonnet-4-20250514",
+      "description": "anthropic model to use",
+      "type": "string"
+    }
+  },
+  "required": [
+    "data_dir",
+    "model",
+    "log_level",
+    "cache_warming",
+    "discord_token"
+  ],
+  "title": "Config",
+  "type": "object",
+  "x-nixcfg-name": "mycel"
+}
