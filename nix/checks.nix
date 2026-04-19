@@ -3,7 +3,6 @@
   lib,
   pkgs,
   nixcfgLib,
-  craneLib,
 }: let
   # -- schemas --
   simple = builtins.fromJSON (builtins.readFile ../examples/mycel.json);
@@ -21,7 +20,8 @@
       else if builtins.elemAt args i == flag && builtins.elemAt args (i + 1) == val
       then true
       else check (i + 1);
-  in check 0;
+  in
+    check 0;
 
   hasFlag = args: flag: builtins.elem flag args;
   lacksFlag = args: flag: !(builtins.elem flag args);
@@ -69,7 +69,10 @@
     maxRetries = -1;
     dataDir = "/var/lib/complex";
     tags = ["web" "prod"];
-    labels = {env = "production"; tier = "frontend";};
+    labels = {
+      env = "production";
+      tier = "frontend";
+    };
     logLevel = "warn";
     optionalFeature = null;
     database = {
@@ -144,8 +147,10 @@ in {
     assert o.hostname.type.name == "str";
     assert o.port.type.name == "unsignedInt16";
     assert o.debug.type.name == "bool";
-    assert o.workers.type.name == "unsignedInt";
-    assert o.maxRetries.type.name == "int";
+    # format-aware: workers has format "uint32" → types.ints.u32
+    assert o.workers.type.name == "unsignedInt32";
+    # format-aware: max_retries has format "int32" → types.ints.s32
+    assert o.maxRetries.type.name == "signedInt32";
     assert o.dataDir.type.name == "str";
     # enum (via $ref)
     assert o.logLevel.type.name == "enum";
@@ -183,67 +188,61 @@ in {
 
   # ── defaults ──────────────────────────────────────────────────────
 
-  nix-defaults =
-    assert complexOpts.hostname.default == "localhost";
-    assert complexOpts.port.default == 8080;
-    assert complexOpts.debug.default == false;
-    assert complexOpts.workers.default == 4;
-    assert complexOpts.maxRetries.default == (-1);
-    assert complexOpts.dataDir.default == "/var/lib/complex";
-    assert complexOpts.tags.default == [];
-    assert complexOpts.logLevel.default == "info";
-    assert complexOpts.optionalFeature.default == null;
-      ok "defaults";
+  nix-defaults = assert complexOpts.hostname.default == "localhost";
+  assert complexOpts.port.default == 8080;
+  assert !complexOpts.debug.default;
+  assert complexOpts.workers.default == 4;
+  assert complexOpts.maxRetries.default == (-1);
+  assert complexOpts.dataDir.default == "/var/lib/complex";
+  assert complexOpts.tags.default == [];
+  assert complexOpts.logLevel.default == "info";
+  assert complexOpts.optionalFeature.default == null;
+    ok "defaults";
 
   # ── module generation ─────────────────────────────────────────────
 
-  nix-module-simple =
-    assert simpleModOpts ? enable;
-    assert simpleModOpts ? dataDir;
-    assert simpleModOpts ? discordTokenPath;
-    assert simpleModOpts ? logLevel;
-      ok "module-simple";
+  nix-module-simple = assert simpleModOpts ? enable;
+  assert simpleModOpts ? dataDir;
+  assert simpleModOpts ? discordTokenPath;
+  assert simpleModOpts ? logLevel;
+    ok "module-simple";
 
-  nix-module-complex =
-    assert complexModOpts ? enable;
-    assert complexModOpts ? hostname;
-    assert complexModOpts ? port;
-    assert complexModOpts ? database;
-    assert complexModOpts ? apiKeyPath;
-    assert complexModOpts ? tags;
-    assert complexModOpts ? allowedOrigins;
-      ok "module-complex";
+  nix-module-complex = assert complexModOpts ? enable;
+  assert complexModOpts ? hostname;
+  assert complexModOpts ? port;
+  assert complexModOpts ? database;
+  assert complexModOpts ? apiKeyPath;
+  assert complexModOpts ? tags;
+  assert complexModOpts ? allowedOrigins;
+    ok "module-complex";
 
-  nix-module-prefix =
-    assert prefixEvaled.options.programs ? mycel;
-    assert prefixEvaled.options.programs.mycel ? enable;
-      ok "module-prefix";
+  nix-module-prefix = assert prefixEvaled.options.programs ? mycel;
+  assert prefixEvaled.options.programs.mycel ? enable;
+    ok "module-prefix";
 
   # ── CLI args ──────────────────────────────────────────────────────
 
-  nix-cli-simple =
-    assert hasPair simpleCli "--data-dir" "/var/lib/mycel";
-    assert hasPair simpleCli "--model" "claude-sonnet-4-20250514";
-    assert hasPair simpleCli "--log-level" "info";
-    assert hasFlag simpleCli "--cache-warming";
-    assert hasPair simpleCli "--discord-token-path" "/run/secrets/discord";
-    assert lacksFlag simpleCli "--anthropic-key-path";
-      ok "cli-simple";
+  nix-cli-simple = assert hasPair simpleCli "--data-dir" "/var/lib/mycel";
+  assert hasPair simpleCli "--model" "claude-sonnet-4-20250514";
+  assert hasPair simpleCli "--log-level" "info";
+  assert hasFlag simpleCli "--cache-warming";
+  assert hasPair simpleCli "--discord-token-path" "/run/secrets/discord";
+  assert lacksFlag simpleCli "--anthropic-key-path";
+    ok "cli-simple";
 
-  nix-cli-complex =
-    assert hasPair complexCli "--hostname" "0.0.0.0";
-    assert hasPair complexCli "--port" "9090";
-    assert hasFlag complexCli "--debug";
-    assert hasPair complexCli "--workers" "8";
-    assert hasPair complexCli "--max-retries" "-1";
-    assert hasPair complexCli "--api-key-path" "/run/secrets/api";
-    # null values omitted
-    assert lacksFlag complexCli "--optional-feature";
-    assert lacksFlag complexCli "--db-password-path";
-    # list values repeat the flag
-    assert hasPair complexCli "--tags" "web";
-    assert hasPair complexCli "--tags" "prod";
-      ok "cli-complex";
+  nix-cli-complex = assert hasPair complexCli "--hostname" "0.0.0.0";
+  assert hasPair complexCli "--port" "9090";
+  assert hasFlag complexCli "--debug";
+  assert hasPair complexCli "--workers" "8";
+  assert hasPair complexCli "--max-retries" "-1";
+  assert hasPair complexCli "--api-key-path" "/run/secrets/api";
+  # null values omitted
+  assert lacksFlag complexCli "--optional-feature";
+  assert lacksFlag complexCli "--db-password-path";
+  # list values repeat the flag
+  assert hasPair complexCli "--tags" "web";
+  assert hasPair complexCli "--tags" "prod";
+    ok "cli-complex";
 
   nix-cli-bool-false = let
     falseCfg = simpleCfg // {cacheWarming = false;};
@@ -262,25 +261,23 @@ in {
 
   # ── env vars ──────────────────────────────────────────────────────
 
-  nix-env-simple =
-    assert simpleEnv.DATA_DIR == "/var/lib/mycel";
-    assert simpleEnv.MODEL == "claude-sonnet-4-20250514";
-    assert simpleEnv.CACHE_WARMING == "true";
-    assert simpleEnv.DISCORD_TOKEN_PATH == "/run/secrets/discord";
-    assert !(simpleEnv ? ANTHROPIC_KEY_PATH);
-      ok "env-simple";
+  nix-env-simple = assert simpleEnv.DATA_DIR == "/var/lib/mycel";
+  assert simpleEnv.MODEL == "claude-sonnet-4-20250514";
+  assert simpleEnv.CACHE_WARMING == "true";
+  assert simpleEnv.DISCORD_TOKEN_PATH == "/run/secrets/discord";
+  assert !(simpleEnv ? ANTHROPIC_KEY_PATH);
+    ok "env-simple";
 
-  nix-env-complex =
-    assert complexEnv.HOSTNAME == "0.0.0.0";
-    assert complexEnv.PORT == "9090";
-    assert complexEnv.DEBUG == "true";
-    assert complexEnv.WORKERS == "8";
-    assert complexEnv.API_KEY_PATH == "/run/secrets/api";
-    assert !(complexEnv ? DB_PASSWORD_PATH);
-    assert !(complexEnv ? OPTIONAL_FEATURE);
-    # list is comma-separated
-    assert complexEnv.TAGS == "web,prod";
-      ok "env-complex";
+  nix-env-complex = assert complexEnv.HOSTNAME == "0.0.0.0";
+  assert complexEnv.PORT == "9090";
+  assert complexEnv.DEBUG == "true";
+  assert complexEnv.WORKERS == "8";
+  assert complexEnv.API_KEY_PATH == "/run/secrets/api";
+  assert !(complexEnv ? DB_PASSWORD_PATH);
+  assert !(complexEnv ? OPTIONAL_FEATURE);
+  # list is comma-separated
+  assert complexEnv.TAGS == "web,prod";
+    ok "env-complex";
 
   # custom output naming for env
   nix-env-output-naming = let
@@ -293,25 +290,23 @@ in {
 
   # ── config attrs ──────────────────────────────────────────────────
 
-  nix-config-simple =
-    assert simpleConfig.data_dir == "/var/lib/mycel";
-    assert simpleConfig.model == "claude-sonnet-4-20250514";
-    assert simpleConfig.cache_warming == true;
-    assert simpleConfig.discord_token_path == "/run/secrets/discord";
-    assert !(simpleConfig ? anthropic_key_path);
-      ok "config-simple";
+  nix-config-simple = assert simpleConfig.data_dir == "/var/lib/mycel";
+  assert simpleConfig.model == "claude-sonnet-4-20250514";
+  assert simpleConfig.cache_warming;
+  assert simpleConfig.discord_token_path == "/run/secrets/discord";
+  assert !(simpleConfig ? anthropic_key_path);
+    ok "config-simple";
 
-  nix-config-complex =
-    assert complexConfig.hostname == "0.0.0.0";
-    assert complexConfig.port == 9090;
-    assert complexConfig.debug == true;
-    assert complexConfig.workers == 8;
-    assert complexConfig.max_retries == (-1);
-    assert complexConfig.tags == ["web" "prod"];
-    assert complexConfig.api_key_path == "/run/secrets/api";
-    assert !(complexConfig ? db_password_path);
-    assert !(complexConfig ? optional_feature);
-      ok "config-complex";
+  nix-config-complex = assert complexConfig.hostname == "0.0.0.0";
+  assert complexConfig.port == 9090;
+  assert complexConfig.debug;
+  assert complexConfig.workers == 8;
+  assert complexConfig.max_retries == (-1);
+  assert complexConfig.tags == ["web" "prod"];
+  assert complexConfig.api_key_path == "/run/secrets/api";
+  assert !(complexConfig ? db_password_path);
+  assert !(complexConfig ? optional_feature);
+    ok "config-complex";
 
   # custom output naming for config
   nix-config-output-naming = let
@@ -324,15 +319,13 @@ in {
 
   # ── overrides ─────────────────────────────────────────────────────
 
-  nix-overrides =
-    assert overrideOpts ? dataDir;
-    assert overrideOpts.dataDir.description == "overridden description";
-      ok "overrides";
+  nix-overrides = assert overrideOpts ? dataDir;
+  assert overrideOpts.dataDir.description == "overridden description";
+    ok "overrides";
 
-  nix-extra-overrides =
-    assert overrideOpts ? package;
-    assert overrideOpts.package.description == "package to use";
-      ok "extra-overrides";
+  nix-extra-overrides = assert overrideOpts ? package;
+  assert overrideOpts.package.description == "package to use";
+    ok "extra-overrides";
 
   nix-override-validation = let
     badModule = nixcfgLib.mkModule {
@@ -414,13 +407,12 @@ in {
 
   # ── name conversion functions ─────────────────────────────────────
 
-  nix-name-conversions =
-    assert nixcfgLib.snakeToCamel "data_dir" == "dataDir";
-    assert nixcfgLib.snakeToCamel "a" == "a";
-    assert nixcfgLib.snakeToCamel "a_b_c" == "aBC";
-    assert nixcfgLib.snakeToKebab "data_dir" == "data-dir";
-    assert nixcfgLib.snakeToScreaming "data_dir" == "DATA_DIR";
-      ok "name-conversions";
+  nix-name-conversions = assert nixcfgLib.snakeToCamel "data_dir" == "dataDir";
+  assert nixcfgLib.snakeToCamel "a" == "a";
+  assert nixcfgLib.snakeToCamel "a_b_c" == "aBC";
+  assert nixcfgLib.snakeToKebab "data_dir" == "data-dir";
+  assert nixcfgLib.snakeToScreaming "data_dir" == "DATA_DIR";
+    ok "name-conversions";
 
   # ── nix driver (from-options) ─────────────────────────────────────
 
@@ -543,7 +535,7 @@ in {
 
     # step 2: JSON Schema → nix module (via mkModule)
     generatedMod = nixcfgLib.mkModule {
-      schema = schema;
+      inherit schema;
       naming = "snake_case";
     };
 
@@ -556,17 +548,19 @@ in {
     assert opts ? verbose;
     assert opts.host.default == "0.0.0.0";
     assert opts.port.default == 3000;
-    # port roundtrips as unsignedInt (port marker lost in nix→schema)
-    assert opts.port.type.name == "unsignedInt";
-    assert opts.verbose.default == false;
+    # with format-aware mapping, port roundtrips perfectly as unsignedInt16
+    # (from-options emits format: "uint16", mapType picks types.ints.u16)
+    assert opts.port.type.name == "unsignedInt16";
+    assert !opts.verbose.default;
       ok "driver-roundtrip";
 
   # ── config format extension ───────────────────────────────────────
 
   nix-config-format-toml = let
-    schema = builtins.fromJSON (builtins.toJSON (simple // {
-      "x-nixcfg-config-format" = "toml";
-    }));
+    schema = builtins.fromJSON (builtins.toJSON (simple
+      // {
+        "x-nixcfg-config-format" = "toml";
+      }));
     result = nixcfgLib.mkConfigFile {
       inherit schema pkgs;
       settings = {
@@ -584,9 +578,10 @@ in {
       ok "config-format-toml";
 
   nix-config-format-json = let
-    schema = builtins.fromJSON (builtins.toJSON (simple // {
-      "x-nixcfg-config-format" = "json";
-    }));
+    schema = builtins.fromJSON (builtins.toJSON (simple
+      // {
+        "x-nixcfg-config-format" = "json";
+      }));
     result = nixcfgLib.mkConfigFile {
       inherit schema pkgs;
       settings = {
@@ -610,8 +605,10 @@ in {
       naming = "snake_case";
       mkArgv = cfg: [
         "mycel"
-        "--data-dir" cfg.data_dir
-        "--model" cfg.model
+        "--data-dir"
+        cfg.data_dir
+        "--model"
+        cfg.model
       ];
     };
     # evaluate as a standalone module (without nixpkgs portable service infra)
@@ -629,7 +626,7 @@ in {
         };
       };
       options = {};
-      lib = lib;
+      inherit lib;
     };
   in
     assert mod._class == "service";
@@ -639,4 +636,348 @@ in {
     assert mod.options.mycel ? package;
     assert mod.config.process.argv == ["mycel" "--data-dir" "/var/lib/mycel" "--model" "claude-sonnet-4-20250514"];
       ok "modular-service";
+
+  # ── x-nixcfg-skip ──────────────────────────────────────────────────
+
+  nix-x-nixcfg-skip = let
+    schemaWithSkip = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "SkipTest";
+      type = "object";
+      "x-nixcfg-name" = "skip-test";
+      properties = {
+        normal_field = {
+          type = "string";
+          description = "shown in nix module";
+          default = "hi";
+        };
+        runtime_handle = {
+          type = "object";
+          description = "runtime-only, excluded from module";
+          "x-nixcfg-skip" = true;
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schemaWithSkip;
+    # cli / env / config transforms still iterate all properties; if cfg
+    # happens to carry a value (e.g. via extraOverrides), it's emitted
+    cfg = {
+      normalField = "ok";
+      runtimeHandle = null;
+    };
+    cli = nixcfgLib.toCliArgs {} schemaWithSkip cfg;
+  in
+    # skipped field does not appear in module options
+    assert opts ? normalField;
+    assert !(opts ? runtimeHandle);
+    # cli gracefully omits the skipped field (null value)
+    assert hasPair cli "--normal-field" "ok";
+    assert lacksFlag cli "--runtime-handle";
+      ok "x-nixcfg-skip";
+
+  # ── x-nixcfg-path ──────────────────────────────────────────────────
+
+  nix-x-nixcfg-path = let
+    schemaWithPath = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "PathTest";
+      type = "object";
+      "x-nixcfg-name" = "path-test";
+      properties = {
+        config_path = {
+          type = "string";
+          description = "path to config file";
+          "x-nixcfg-path" = true;
+        };
+        optional_path = {
+          type = ["string" "null"];
+          description = "optional override path";
+          "x-nixcfg-path" = true;
+        };
+        # schemars emits format: "path" for PathBuf, auto-detected
+        auto_path = {
+          type = "string";
+          format = "path";
+          description = "auto-detected path via format";
+        };
+        plain_str = {
+          type = "string";
+          description = "still just a string";
+          default = "hi";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schemaWithPath;
+  in
+    assert opts.configPath.type.name == "path";
+    assert opts.optionalPath.type.name == "nullOr";
+    assert opts.optionalPath.type.nestedTypes.elemType.name == "path";
+    assert opts.autoPath.type.name == "path";
+    # non-path strings are unaffected
+    assert opts.plainStr.type.name == "str";
+      ok "x-nixcfg-path";
+
+  # ── anyOf bool-or-enum (legacy union handling) ─────────────────────
+
+  nix-anyof-bool-enum = let
+    schemaWithUnion = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "UnionTest";
+      type = "object";
+      "x-nixcfg-name" = "union-test";
+      "$defs" = {
+        ThinkingLevel = {
+          type = "string";
+          enum = ["low" "medium" "high"];
+        };
+      };
+      properties = {
+        # real-world schemars shape: config accepts true / false / "high" /
+        # "medium" / "low" for back-compat
+        thinking = {
+          anyOf = [
+            {type = "boolean";}
+            {"$ref" = "#/$defs/ThinkingLevel";}
+          ];
+          description = "thinking level or bool toggle";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schemaWithUnion;
+    t = opts.thinking.type;
+  in
+    # chained either gives types.either bool (types.enum [...])
+    assert t.name == "either";
+    assert t.nestedTypes.left.name == "bool";
+    assert t.nestedTypes.right.name == "enum";
+      ok "anyof-bool-enum";
+
+  # ── format-aware integer mapping ──────────────────────────────────
+
+  nix-integer-formats = let
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "IntFormats";
+      type = "object";
+      "x-nixcfg-name" = "int-formats";
+      properties = {
+        small_unsigned = {
+          type = "integer";
+          format = "uint8";
+          description = "byte";
+        };
+        small_signed = {
+          type = "integer";
+          format = "int8";
+          description = "signed byte";
+        };
+        sample_count = {
+          type = "integer";
+          format = "uint16";
+          description = "count";
+        };
+        big_unsigned = {
+          type = "integer";
+          format = "uint32";
+          description = "large count";
+        };
+        # bounds-only fallback (no format): should give ints.between
+        percent = {
+          type = "integer";
+          minimum = 0;
+          maximum = 100;
+          description = "percentage";
+        };
+        # minimum 0 only: unsigned
+        any_positive = {
+          type = "integer";
+          minimum = 0;
+          description = "any non-negative";
+        };
+        # no bounds: plain int
+        arbitrary = {
+          type = "integer";
+          description = "any integer";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+  in
+    assert opts.smallUnsigned.type.name == "unsignedInt8";
+    assert opts.smallSigned.type.name == "signedInt8";
+    assert opts.sampleCount.type.name == "unsignedInt16";
+    assert opts.bigUnsigned.type.name == "unsignedInt32";
+    assert opts.percent.type.name == "intBetween";
+    assert opts.anyPositive.type.name == "unsignedInt";
+    assert opts.arbitrary.type.name == "int";
+      ok "integer-formats";
+
+  # ── description / example overrides ───────────────────────────────
+
+  nix-description-override = let
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "DescTest";
+      type = "object";
+      "x-nixcfg-name" = "desc-test";
+      properties = {
+        terse = {
+          type = "string";
+          description = "cwd";
+          "x-nixcfg-description" = "working directory used when invoking configured lifecycle hooks. defaults to the directory the app was launched from";
+          default = ".";
+        };
+        no_override = {
+          type = "string";
+          description = "unchanged";
+          default = "x";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+  in
+    # override wins
+    assert lib.hasPrefix "working directory used" opts.terse.description;
+    # no override: description passes through
+    assert opts.noOverride.description == "unchanged";
+      ok "description-override";
+
+  nix-example-override = let
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "ExampleTest";
+      type = "object";
+      "x-nixcfg-name" = "example-test";
+      properties = {
+        # explicit override takes precedence
+        with_override = {
+          type = "string";
+          examples = ["from-examples-array"];
+          "x-nixcfg-example" = "from-extension";
+          default = "x";
+        };
+        # fallback: first of examples
+        from_examples = {
+          type = "string";
+          examples = ["first" "second"];
+          default = "x";
+        };
+        # no example data at all
+        no_example = {
+          type = "string";
+          default = "x";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+  in
+    assert opts.withOverride.example == "from-extension";
+    assert opts.fromExamples.example == "first";
+    assert !(opts.noExample ? example);
+      ok "example-override";
+
+  # ── string validation (pattern, minLength, maxLength) ─────────────
+
+  nix-string-pattern = let
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "PatternTest";
+      type = "object";
+      "x-nixcfg-name" = "pattern-test";
+      properties = {
+        username = {
+          type = "string";
+          pattern = "^[a-z]+$";
+          description = "lowercase only";
+          default = "admin";
+        };
+        plain = {
+          type = "string";
+          description = "no pattern";
+          default = "x";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+  in
+    # pattern → types.strMatching (name includes the pattern: `strMatching "..."`)
+    assert lib.hasPrefix "strMatching" opts.username.type.name;
+    assert opts.username.type.check "hello";
+    assert !(opts.username.type.check "Hello123");
+    # no pattern → plain str
+    assert opts.plain.type.name == "str";
+      ok "string-pattern";
+
+  nix-string-length = let
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "LengthTest";
+      type = "object";
+      "x-nixcfg-name" = "length-test";
+      properties = {
+        short_name = {
+          type = "string";
+          minLength = 1;
+          maxLength = 8;
+          description = "1-8 chars";
+          default = "x";
+        };
+        min_only = {
+          type = "string";
+          minLength = 3;
+          default = "abc";
+        };
+        max_only = {
+          type = "string";
+          maxLength = 5;
+          default = "hi";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+  in
+    # addCheck preserves the base type's name ("str")
+    assert opts.shortName.type.name == "str";
+    assert opts.shortName.type.check "hi";
+    assert !(opts.shortName.type.check "");
+    assert !(opts.shortName.type.check "way-too-long");
+    # min only: rejects empty
+    assert !(opts.minOnly.type.check "ab");
+    assert opts.minOnly.type.check "abc";
+    # max only: rejects overlong
+    assert opts.maxOnly.type.check "short";
+    assert !(opts.maxOnly.type.check "too-long");
+      ok "string-length";
+
+  nix-string-pattern-and-length = let
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "SlugTest";
+      type = "object";
+      "x-nixcfg-name" = "slug-test";
+      properties = {
+        slug = {
+          type = "string";
+          pattern = "^[a-z0-9-]+$";
+          minLength = 3;
+          maxLength = 16;
+          description = "url slug";
+          default = "abc";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+    t = opts.slug.type;
+  in
+    # combined: strMatching base with length addChecks on top
+    assert lib.hasPrefix "strMatching" t.name;
+    # valid: matches pattern and within bounds
+    assert t.check "hello-world";
+    # fails pattern
+    assert !(t.check "HELLO");
+    # fails min length
+    assert !(t.check "ab");
+    # fails max length
+    assert !(t.check "a-very-long-slug-that-exceeds");
+      ok "string-pattern-and-length";
 }
