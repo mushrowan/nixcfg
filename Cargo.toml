@@ -1,5 +1,9 @@
 [workspace]
-members = ["nixcfg", "nixcfg-derive", "example-mycel"]
+members = [
+  "drivers/rust/nixcfg",
+  "drivers/rust/nixcfg-derive",
+  "drivers/rust/example-mycel",
+]
 resolver = "2"
 
 [workspace.metadata.crane]

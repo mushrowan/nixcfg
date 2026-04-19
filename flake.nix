@@ -64,7 +64,22 @@
 
         craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        src = craneLib.cleanCargoSource ./drivers/rust;
+        # assemble a precise source for the cargo workspace: just the root
+        # workspace manifest + lockfile + rust crate sources. this keeps
+        # cache keys tight (editing docs, gleam, or nix files won't bust
+        # rust builds) and avoids crane accidentally picking up gleam
+        # manifest.toml files under drivers/gleam/
+        src = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
+            ./Cargo.toml
+            ./Cargo.lock
+            ./clippy.toml
+            ./deny.toml
+            ./.config
+            (craneLib.fileset.commonCargoSources ./drivers/rust)
+          ];
+        };
 
         nixcfgLib = import ./nix/lib.nix {inherit (pkgs) lib;};
 
