@@ -1253,4 +1253,106 @@ in {
     assert lib.isDerivation drv1;
     assert lib.isDerivation drv2;
       ok "mk-config-file-settings-attr";
+
+  # ── struct-level default with secret-renamed keys ─────────────────
+
+  nix-default-rewrites-secret-keys = let
+    # reproduces the mush programs.mush.settings.apiKeys bug: an object
+    # property with a struct-level default whose keys match secret field
+    # names. without the rewrite, the submodule receives definitions for
+    # `anthropic` when the option is actually `anthropicPath`, and the
+    # module system throws "option does not exist"
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "ApiKeysHost";
+      "x-nixcfg-name" = "api-keys-host";
+      type = "object";
+      "$defs".ApiKeys = {
+        type = "object";
+        properties = {
+          anthropic = {
+            type = ["string" "null"];
+            "x-nixcfg-secret" = true;
+          };
+          openai = {
+            type = ["string" "null"];
+            "x-nixcfg-secret" = true;
+          };
+          skipped = {
+            type = "string";
+            "x-nixcfg-skip" = true;
+          };
+        };
+      };
+      properties.api_keys = {
+        "$ref" = "#/$defs/ApiKeys";
+        description = "api keys";
+        # the exact shape schemars emits for #[serde(default)] on a struct:
+        # a default object whose keys are the pre-rename snake_case field names
+        default = {
+          anthropic = null;
+          openai = null;
+          skipped = "ignore me";
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+    defaultValue = opts.apiKeys.default;
+    # evaluate a module built from this schema, with no user-supplied
+    # definitions. this is what actually broke in mush: the struct
+    # default would inject bogus keys that aren't valid options
+    mod = nixcfgLib.mkModule {inherit schema;};
+    evaled = lib.evalModules {modules = [mod];};
+  in
+    # keys rewritten: anthropic → anthropicPath, openai → openaiPath
+    assert defaultValue ? anthropicPath;
+    assert defaultValue ? openaiPath;
+    assert defaultValue.anthropicPath == null;
+    assert defaultValue.openaiPath == null;
+    # skipped keys stripped from the default
+    assert !(defaultValue ? skipped);
+    assert !(defaultValue ? skippedPath);
+    # module evaluates cleanly (the bug surfaced here with "option does not exist")
+    assert evaled.config.services.api-keys-host.apiKeys.anthropicPath == null;
+    assert evaled.config.services.api-keys-host.apiKeys.openaiPath == null;
+      ok "default-rewrites-secret-keys";
+
+  # ── struct default with freeform submodule ────────────────────────
+
+  nix-default-with-freeform = let
+    # when the schema has `properties + additionalProperties`, defaults
+    # with unknown keys should pass through (with naming transform)
+    # rather than getting dropped — they land in the freeform submodule
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "FreeformDefault";
+      "x-nixcfg-name" = "freeform-default";
+      type = "object";
+      "$defs".Map = {
+        type = "object";
+        properties.anthropic = {
+          type = ["string" "null"];
+          "x-nixcfg-secret" = true;
+        };
+        additionalProperties = {type = "string";};
+      };
+      properties.keys = {
+        "$ref" = "#/$defs/Map";
+        default = {
+          anthropic = null;
+          groq = "sk-groq"; # freeform extra
+          openrouter = "sk-or"; # another freeform extra
+        };
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+    defaultValue = opts.keys.default;
+  in
+    # named secret renamed
+    assert defaultValue ? anthropicPath;
+    assert defaultValue.anthropicPath == null;
+    # freeform keys pass through (naming transform applied, no _path)
+    assert defaultValue.groq == "sk-groq";
+    assert defaultValue.openrouter == "sk-or";
+      ok "default-with-freeform";
 }

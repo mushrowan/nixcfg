@@ -340,6 +340,54 @@
     then toNixName "${name}_path"
     else toNixName name;
 
+  # transform a default value so its keys match the generated nix option
+  # names. needed because schemars emits struct-level defaults with the
+  # original (snake_case, un-suffixed) field names, but nixcfg renames
+  # secret fields with `_path` and applies the naming transform. without
+  # this rewrite, the submodule default carries definitions for options
+  # that don't exist and evalModules errors with "option does not exist"
+  #
+  # behaviour:
+  # - keys for x-nixcfg-skip properties are dropped
+  # - secret keys get the _path suffix (then naming transform)
+  # - other keys get the naming transform applied
+  # - unknown keys pass through (with naming transform) only when the
+  #   schema has additionalProperties (freeform submodule); otherwise
+  #   dropped so a stale default can't sneak invalid keys into a strict
+  #   submodule
+  # - recurses into nested submodule defaults
+  transformDefault = root: toNixName: schema: value: let
+    normalised = normaliseSchema schema;
+  in
+    if !(builtins.isAttrs value) || !(normalised ? properties)
+    then value
+    else let
+      hasFreeform = normalised ? additionalProperties;
+      step = acc: key: let
+        prop = normalised.properties.${key} or null;
+        subValue = value.${key};
+      in
+        if prop == null
+        then
+          if hasFreeform
+          then acc // {${toNixName key} = subValue;}
+          else acc
+        else let
+          refResolved =
+            if prop ? "$ref"
+            then (resolveRef root prop."$ref") // (builtins.removeAttrs prop ["$ref"])
+            else prop;
+          resolved = inheritRefExtensions root refResolved;
+          isSkipped = resolved."x-nixcfg-skip" or false;
+          nixName = nixNameFor toNixName key resolved;
+          transformedSub = transformDefault root toNixName resolved subValue;
+        in
+          if isSkipped
+          then acc
+          else acc // {${nixName} = transformedSub;};
+    in
+      lib.foldl' step {} (builtins.attrNames value);
+
   # map a single property to a nix option
   # - direct override: {type=...; description=...;} applied at this level
   # - nestedOverrides: dotted-path overrides to propagate into submodules
@@ -393,7 +441,7 @@
         else if isSecret
         then {}
         else if resolved ? default
-        then {inherit (resolved) default;}
+        then {default = transformDefault root toNixName resolved resolved.default;}
         else if isNullable
         then {default = null;}
         else if isObject && resolved ? properties
@@ -730,6 +778,7 @@
       snakeToKebab
       snakeToScreaming
       nixNameFor
+      transformDefault
       ;
 
     # nix driver: generate JSON Schema from nix module options

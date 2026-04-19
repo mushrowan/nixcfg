@@ -353,13 +353,14 @@ stay strict and freeform extras are accepted and typed.
 
 ## checks
 
-`nix flake check` runs 58 checks:
+`nix flake check` runs 60 checks:
 
-- **48 nix lib tests**: naming, types, secrets, defaults, module generation,
-  cli/env/config conversion, overrides (including dotted paths +
-  `topLevelExtraOverrides`), reverse driver, modular service, extensions,
-  format-aware ints, string validation, anyOf, tagged-flatten merging,
-  freeformType for open-map submodules, secret inheritance through $ref
+- **50 nix lib tests**: naming, types, secrets (including $ref inheritance
+  and default-key rewrite), defaults, module generation, cli/env/config
+  conversion, overrides (including dotted paths + `topLevelExtraOverrides`),
+  reverse driver, modular service, extensions, format-aware ints, string
+  validation, anyOf, tagged-flatten merging, freeformType for open-map
+  submodules
 - **5 rust checks**: build, clippy (deny warnings), nextest, cargo-deny,
   doctest
 - **1 schema drift check** (rust): example binary output diffed against checked-in `schema.json`
