@@ -39,54 +39,72 @@ config struct ──→ JSON Schema ──→ nix lib ──→ mkOption defs
 
 ### **_option 4:_** use NixCfg.
 
-The goal of NixCfg is:  
+the goal of NixCfg is:
 **the program == the source of truth for its nix module options**
 
 ## quick example (rust)
 
 ```rust
-use schemars::JsonSchema;
+use nixcfg::{JsonSchema, NixSchema, nixcfg};
 use serde::Serialize;
 
+#[nixcfg]
 #[derive(JsonSchema, Serialize)]
-enum LogLevel { Trace, Debug, Info, Warn, Error }
-
-#[derive(JsonSchema, Serialize)]
+/// my service configuration
 struct Config {
     /// data directory
-    #[serde(default = "default_data_dir")]
     data_dir: String,
+
+    /// listen port
+    #[nixcfg(port)]
+    listen_port: u16,
+
+    /// API authentication token
+    #[nixcfg(secret)]
+    api_token: String,
 
     /// log level
     log_level: LogLevel,
-
-    /// discord bot token
-    #[schemars(extend("x-nixcfg-secret" = true))]
-    token: String,
 }
+
+#[derive(JsonSchema, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum LogLevel { Trace, Debug, Info, Warn, Error }
 ```
 
 emit the schema and consume in nix:
 
 ```rust
-use nixcfg::NixSchema;
-let schema = NixSchema::from::<Config>("myapp");
+let defaults = serde_json::to_value(Config::default()).unwrap();
+let schema = NixSchema::from::<Config>("myapp").with_defaults(defaults);
 println!("{}", schema.to_json_pretty());
 ```
 
 ```nix
 {
-  imports = [
-    nixcfg.lib.mkModule { schema = ./schema.json; }
-  ];
+  imports = [ (nixcfg.lib.mkModule { schema = ./schema.json; }) ];
 }
 
 # produces:
 # services.myapp.enable
-# services.myapp.dataDir        (str, default "/var/lib/myapp")
+# services.myapp.dataDir        (str, with default)
+# services.myapp.listenPort     (types.port)
+# services.myapp.apiTokenPath   (path, secret)
 # services.myapp.logLevel       (enum)
-# services.myapp.tokenPath      (path, secret)
 ```
+
+see `drivers/rust/example-mycel/` for a complete demo, including a flake
+check that diffs the binary's output against a checked-in `schema.json` so
+the struct and the schema can't drift apart.
+
+## drivers
+
+| language | location | notes |
+|---|---|---|
+| rust | `drivers/rust/` | uses [schemars](https://graham.cool/schemars/) + `#[nixcfg]` macro |
+| gleam | `drivers/gleam/` | builder DSL, runs on BEAM |
+
+any language with a JSON Schema library can be a driver.
 
 ## how it works
 
@@ -94,36 +112,109 @@ the schema is standard [JSON Schema (draft 2020-12)](https://json-schema.org/dra
 with `x-nixcfg-*` extensions. any language that can emit JSON Schema can use
 the nix library. see `schema/v1.md` for the full spec.
 
-nixcfg extensions:
+### extensions
 
 | extension | effect |
 |---|---|
 | `x-nixcfg-name` | service name for module path |
-| `x-nixcfg-secret` | field becomes a file path, name gets `_path` suffix |
+| `x-nixcfg-secret` | field becomes `types.path`, name gets `_path` suffix |
 | `x-nixcfg-port` | integer becomes `types.port` |
+| `x-nixcfg-path` | string becomes `types.path` (schemars PathBuf auto-detected) |
+| `x-nixcfg-skip` | omit from nix module options (keep in schema for cli/env/config) |
+| `x-nixcfg-description` | override description (for nix-facing prose) |
+| `x-nixcfg-example` | override single example value |
+| `x-nixcfg-config-format` | `toml` / `json` / `yaml` for `mkConfigFile` |
 
-any language with a JSON Schema library (schemars for rust, jsonschema for
-python, etc.) can be a driver. no custom proc macros or code generation needed.
+### rust driver
+
+the `nixcfg` crate re-exports a `#[nixcfg]` attribute macro that rewrites
+field attributes into the schemars `extend` form:
+
+```rust
+#[nixcfg]
+#[derive(JsonSchema, Serialize)]
+struct Config {
+    #[nixcfg(secret)] api_key: String,
+    #[nixcfg(port)] listen_port: u16,
+    #[nixcfg(path)] data_dir: std::path::PathBuf,
+    #[nixcfg(skip)] runtime_handle: std::sync::Arc<()>,
+    #[nixcfg(secret, path)] pem_path: String,
+    #[nixcfg(description = "...", example = "...")] hooks_cwd: String,
+}
+```
+
+flags: `secret`, `port`, `path`, `skip`. key=value: `description`, `example`.
+
+for types that can't impl `JsonSchema` locally, use schemars's
+`#[schemars(schema_with = "fn_path")]` to hand-roll the schema fragment.
+nixcfg extensions embedded in it pass through untouched.
+
+### gleam driver
+
+the `nixcfg` gleam package provides a builder DSL. since gleam doesn't
+have macros, you construct the schema explicitly:
+
+```gleam
+import gleam/io
+import gleam/json
+import nixcfg
+
+pub fn main() {
+  nixcfg.new("myapp", "my service configuration")
+  |> nixcfg.prop(
+    "data_dir",
+    nixcfg.string()
+      |> nixcfg.default(json.string("/var/lib/myapp"))
+      |> nixcfg.description("data directory"),
+  )
+  |> nixcfg.prop("listen_port", nixcfg.u16() |> nixcfg.port())
+  |> nixcfg.prop("api_token", nixcfg.string() |> nixcfg.secret())
+  |> nixcfg.prop(
+    "log_level",
+    nixcfg.enum_of(["trace", "debug", "info", "warn", "error"])
+      |> nixcfg.default(json.string("info")),
+  )
+  |> nixcfg.to_json
+  |> io.println
+}
+```
+
+constructors: `string`, `boolean`, `integer`, `unsigned`, `u8` / `u16` /
+`u32`, `i8` / `i16` / `i32`, `enum_of`, `list_of`, `nullable`, `raw`
+(escape hatch for unusual types).
+
+modifiers: `default`, `description`, `example`, `pattern`, `min_length`,
+`max_length`, `secret`, `port`, `path`, `skip`, `override_description`,
+`override_example`.
+
+see `drivers/gleam/nixcfg/src/example_mycel.gleam` for a complete demo.
+
+### other languages
+
+any language with a JSON Schema library (go's `jsonschema`, python's
+`pydantic`, zig's comptime, lua schemas) can be a driver. no custom proc
+macros or code generation needed.
 
 ## nix lib
 
 ### functions
 
-| function            | signature                                                                  |
-| ------------------- | -------------------------------------------------------------------------- |
-| `mkModule`          | `{ schema, naming?, prefix?, settingsAttr?, overrides?, extraOverrides? } -> NixOS module` |
-| `optionsFromSchema` | `{ naming? } -> schema -> options`                                           |
-| `optionsFromFile`   | `{ naming? } -> path -> options`                                             |
-| `toCliArgs`         | `{ naming?, output? } -> schema -> cfg -> [string]`                           |
-| `toEnvVars`         | `{ naming?, output? } -> schema -> cfg -> attrset`                            |
-| `toConfigAttrs`     | `{ naming?, output? } -> schema -> cfg -> attrset`                            |
+| function | signature |
+|---|---|
+| `mkModule` | `{ schema, naming?, prefix?, settingsAttr?, overrides?, extraOverrides? } -> NixOS module` |
+| `mkConfigFile` | `{ pkgs, schema, settings } -> derivation` (toml/json/yaml via `x-nixcfg-config-format`) |
+| `mkModularService` | `{ schema, naming?, mkArgv?, extraModules? } -> portable service module` |
+| `optionsFromSchema` | `{ naming? } -> schema -> options` |
+| `optionsFromFile` | `{ naming? } -> path -> options` |
+| `toCliArgs` | `{ naming?, output? } -> schema -> cfg -> [string]` |
+| `toEnvVars` | `{ naming?, output? } -> schema -> cfg -> attrset` |
+| `toConfigAttrs` | `{ naming?, output? } -> schema -> cfg -> attrset` |
+| `schemaFromOptions` / `schemaFromModule` | reverse driver: nix options → JSON Schema |
 
 ### naming
 
 all naming conventions are available everywhere: `camelCase`, `snake_case`,
 `kebab-case`, `SCREAMING_SNAKE_CASE`. the schema is always `snake_case`.
-
-each function has sensible defaults:
 
 | context | parameter | default |
 |---|---|---|
@@ -146,14 +237,14 @@ nixcfg.lib.mkModule {
 }
 ```
 
-`overrides` keys are validated against the schema. `extraOverrides` adds
-nix-only options.
+`overrides` keys are validated against the schema (catches drift when fields
+are renamed). `extraOverrides` adds nix-only options (like `package` or
+`user`) that don't exist in the schema.
 
 ### settingsAttr
 
-by default, generated options are placed directly under the module path
-(e.g. `services.myapp.dataDir`). set `settingsAttr` to nest them under a
-submodule instead:
+by default, options sit directly under the module path
+(`services.myapp.dataDir`). set `settingsAttr` to nest them:
 
 ```nix
 nixcfg.lib.mkModule {
@@ -173,9 +264,26 @@ inspect the generated module with `nix run .#debug`:
 apps.debug = (nixcfg.lib.mkLib pkgs).mkDebugApp { schema = ./schema.json; };
 ```
 
+### validation
+
+nixcfg maps JSON Schema validation keywords to nix type checks at eval time:
+
+- **strings**: `pattern` → `types.strMatching`, `minLength` / `maxLength`
+  → composed via `addCheck` + `builtins.stringLength`
+- **integers**: schemars format strings (`uint8` / `uint16` / `uint32` /
+  `int8` / `int16` / `int32`) map to bounded `types.ints.u8` etc.
+  `minimum`+`maximum` maps to `types.ints.between`, `minimum: 0` alone
+  maps to `types.ints.unsigned`
+
 ## checks
 
-`nix flake check` runs 30 checks: 27 nix (naming conventions, type mapping,
-secrets, defaults, module generation, settingsAttr, CLI/env/config conversion
-with output naming, overrides, end-to-end snake_case, name conversions) and 3
-rust (cargo test, clippy, fmt).
+`nix flake check` runs 50 checks:
+
+- **42 nix lib tests**: naming, types, secrets, defaults, module generation,
+  cli/env/config conversion, overrides, reverse driver, modular service,
+  extensions, format-aware ints, string validation, anyOf, etc
+- **5 rust checks**: build, clippy (deny warnings), nextest (12 tests),
+  cargo-deny, doctest
+- **1 schema drift check** (rust): example binary output diffed against checked-in `schema.json`
+- **1 gleam schema drift check** + **1 gleam unit test**: builds the gleam nixcfg package, runs gleeunit tests, verifies the example app's output matches checked-in `schema.json`
+- **2 formatting**: treefmt wrapper + pre-commit hook
