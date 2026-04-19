@@ -1,9 +1,0 @@
-[workspace]
-members = ["nixcfg", "nixcfg-derive", "example-mycel"]
-resolver = "2"
-
-[workspace.metadata.crane]
-name = "nixcfg-rs"
-
-[workspace.package]
-version = "0.3.0"

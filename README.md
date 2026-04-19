@@ -99,18 +99,20 @@ println!("{}", schema.to_json_pretty());
 # services.myapp.logLevel       (enum)
 ```
 
-see `rust/example-mycel/` for a complete demo, including a flake
-check that diffs the binary's output against a checked-in `schema.json` so
-the struct and the schema can't drift apart.
+see [nixcfg-rs](https://github.com/mushrowan/nixcfg-rs) for the rust
+driver, including a full demo and a schema drift check.
 
 ## drivers
 
-| language | location | notes |
-|---|---|---|
-| rust | `rust/` | uses [schemars](https://graham.cool/schemars/) + `#[nixcfg]` macro |
-| gleam | `gleam/` | builder DSL, runs on BEAM |
+drivers live in their own repos so the nixcfg monorepo stays nix-first:
 
-any language with a JSON Schema library can be a driver.
+| language | repo | notes |
+|---|---|---|
+| rust | [mushrowan/nixcfg-rs](https://github.com/mushrowan/nixcfg-rs) | [schemars](https://graham.cool/schemars/) + `#[nixcfg]` macro |
+| gleam | [mushrowan/nixcfg-gleam](https://github.com/mushrowan/nixcfg-gleam) | builder DSL, runs on BEAM |
+
+any language with a JSON Schema library can be a driver — see
+`schema/v1.md` for the contract.
 
 ## how it works
 
@@ -131,75 +133,22 @@ the nix library. see `schema/v1.md` for the full spec.
 | `x-nixcfg-example` | override single example value |
 | `x-nixcfg-config-format` | `toml` / `json` / `yaml` for `mkConfigFile` |
 
-### rust driver
+### driver summaries
 
-the `nixcfg` crate re-exports a `#[nixcfg]` attribute macro that rewrites
-field attributes into the schemars `extend` form:
+each driver is a separate repo. they're thin: emit JSON Schema with
+`x-nixcfg-*` extensions in the shape of `schema/v1.md`. see each repo
+for the full syntax.
 
-```rust
-#[nixcfg]
-#[derive(JsonSchema, Serialize)]
-struct Config {
-    #[nixcfg(secret)] api_key: String,
-    #[nixcfg(port)] listen_port: u16,
-    #[nixcfg(path)] data_dir: std::path::PathBuf,
-    #[nixcfg(skip)] runtime_handle: std::sync::Arc<()>,
-    #[nixcfg(secret, path)] pem_path: String,
-    #[nixcfg(description = "...", example = "...")] hooks_cwd: String,
-}
-```
-
-flags: `secret`, `port`, `path`, `skip`. key=value: `description`, `example`.
-
-for types that can't impl `JsonSchema` locally, use schemars's
-`#[schemars(schema_with = "fn_path")]` to hand-roll the schema fragment.
-nixcfg extensions embedded in it pass through untouched.
-
-### gleam driver
-
-the `nixcfg` gleam package provides a builder DSL. since gleam doesn't
-have macros, you construct the schema explicitly:
-
-```gleam
-import gleam/io
-import gleam/json
-import nixcfg
-
-pub fn main() {
-  nixcfg.new("myapp", "my service configuration")
-  |> nixcfg.prop(
-    "data_dir",
-    nixcfg.string()
-      |> nixcfg.default(json.string("/var/lib/myapp"))
-      |> nixcfg.description("data directory"),
-  )
-  |> nixcfg.prop("listen_port", nixcfg.u16() |> nixcfg.port())
-  |> nixcfg.prop("api_token", nixcfg.string() |> nixcfg.secret())
-  |> nixcfg.prop(
-    "log_level",
-    nixcfg.enum_of(["trace", "debug", "info", "warn", "error"])
-      |> nixcfg.default(json.string("info")),
-  )
-  |> nixcfg.to_json
-  |> io.println
-}
-```
-
-constructors: `string`, `boolean`, `integer`, `unsigned`, `u8` / `u16` /
-`u32`, `i8` / `i16` / `i32`, `enum_of`, `list_of`, `nullable`, `raw`
-(escape hatch for unusual types).
-
-modifiers: `default`, `description`, `example`, `pattern`, `min_length`,
-`max_length`, `secret`, `port`, `path`, `skip`, `override_description`,
-`override_example`.
-
-see `gleam/nixcfg/src/example_mycel.gleam` for a complete demo.
-
-### other languages
+- **[nixcfg-rs](https://github.com/mushrowan/nixcfg-rs)**: schemars +
+  `#[nixcfg]` attribute macro. one-liner `nixcfg::emit::<T>("name")`
+  for the common emitter binary
+- **[nixcfg-gleam](https://github.com/mushrowan/nixcfg-gleam)**:
+  pipe-friendly builder DSL (no macros in gleam), suitable for direct
+  composition at runtime
 
 any language with a JSON Schema library (go's `jsonschema`, python's
-`pydantic`, zig's comptime, lua schemas) can be a driver. no custom proc
-macros or code generation needed.
+`pydantic`, zig's comptime, lua schemas) can be a driver. no custom
+proc macros or code generation needed.
 
 ## nix lib
 
@@ -353,7 +302,7 @@ stay strict and freeform extras are accepted and typed.
 
 ## checks
 
-`nix flake check` runs 60 checks:
+`nix flake check` in this repo runs 52 checks (nix lib only):
 
 - **50 nix lib tests**: naming, types, secrets (including $ref inheritance
   and default-key rewrite), defaults, module generation, cli/env/config
@@ -361,8 +310,10 @@ stay strict and freeform extras are accepted and typed.
   reverse driver, modular service, extensions, format-aware ints, string
   validation, anyOf, tagged-flatten merging, freeformType for open-map
   submodules
-- **5 rust checks**: build, clippy (deny warnings), nextest, cargo-deny,
-  doctest
-- **1 schema drift check** (rust): example binary output diffed against checked-in `schema.json`
-- **1 gleam schema drift check** + **1 gleam unit test**: builds the gleam nixcfg package, runs gleeunit tests, verifies the example app's output matches checked-in `schema.json`
 - **2 formatting**: treefmt wrapper + pre-commit hook
+
+rust and gleam drivers each have their own `nix flake check`:
+[nixcfg-rs](https://github.com/mushrowan/nixcfg-rs) runs crane +
+clippy + nextest + cargo-deny + doctest + a schema drift check;
+[nixcfg-gleam](https://github.com/mushrowan/nixcfg-gleam) runs
+gleeunit + its own drift check.
