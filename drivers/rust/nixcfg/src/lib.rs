@@ -6,7 +6,8 @@
 //! - `#[schemars(extend("x-nixcfg-secret" = true))]` for secret fields
 //! - `#[schemars(extend("x-nixcfg-port" = true))]` for port types
 //!
-//! then emit the schema with `NixSchema::from::<T>("name")`
+//! then emit the schema with `NixSchema::from::<T>("name")`, or use the
+//! one-liner [`emit::<T>("name")`] when `T: JsonSchema + Default + Serialize`
 
 pub use schemars;
 pub use schemars::JsonSchema;
@@ -14,6 +15,31 @@ pub use serde_json;
 
 // re-export the nixcfg attribute macro for ergonomic use
 pub use nixcfg_derive::nixcfg;
+
+/// emit a schema for `T` as pretty JSON, with defaults from `T::default()`
+/// merged in. this is the one-liner equivalent of the idiomatic emitter
+/// binary every downstream project writes
+///
+/// ```no_run
+/// use nixcfg::{JsonSchema, emit};
+/// use serde::Serialize;
+///
+/// #[derive(JsonSchema, Serialize, Default)]
+/// struct Config { data_dir: String }
+///
+/// fn main() {
+///     println!("{}", emit::<Config>("myapp"));
+/// }
+/// ```
+pub fn emit<T>(name: impl Into<String>) -> String
+where
+    T: JsonSchema + Default + serde::Serialize,
+{
+    let defaults = serde_json::to_value(T::default()).expect("defaults serialise");
+    NixSchema::from::<T>(name)
+        .with_defaults(defaults)
+        .to_json_pretty()
+}
 
 /// wraps a schemars-generated JSON Schema with nixcfg metadata
 #[derive(Debug, Clone)]

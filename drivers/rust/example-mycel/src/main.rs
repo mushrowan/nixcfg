@@ -6,7 +6,7 @@
 //! re-runs the binary and diffs against the checked-in file to catch
 //! drift when the struct changes
 
-use nixcfg::{JsonSchema, NixSchema, nixcfg};
+use nixcfg::{JsonSchema, nixcfg};
 use serde::Serialize;
 
 /// mycel discord bot configuration
@@ -59,7 +59,7 @@ impl Default for Config {
 }
 
 fn main() {
-    let defaults = serde_json::to_value(Config::default()).expect("defaults serialise");
-    let schema = NixSchema::from::<Config>("mycel").with_defaults(defaults);
-    println!("{}", schema.to_json_pretty());
+    // one-liner: wraps NixSchema::from + with_defaults + to_json_pretty
+    print!("{}", nixcfg::emit::<Config>("mycel"));
+    println!();
 }
