@@ -8,6 +8,16 @@
 #   x-nixcfg-skip:        omit property from nix module options
 #   x-nixcfg-description: override description (takes precedence over description)
 #   x-nixcfg-example:     override example (takes precedence over first of examples)
+#   x-nixcfg-config-format: "toml" / "json" / "yaml" for `mkConfigFile`
+#
+# schemars-specific shape handling:
+#   - `anyOf: [{$ref}, {type: null}]` (Option<T>): x-nixcfg-* extensions on
+#     the $ref target are hoisted onto the wrapper so secrets on wrapper
+#     types propagate through Option<T> fields
+#   - `properties + oneOf` (flatten + serde(tag)): merged into a single
+#     submodule with the tag field as an enum discriminator
+#   - `properties + additionalProperties` (flatten of HashMap<String, T>):
+#     submodule with strict named options + freeformType for extras
 {lib}: let
   # -- name conversions --
   snakeToCamel = s: let
@@ -43,18 +53,146 @@
   in
     lib.getAttrFromPath path root;
 
+  # partition dotted-path overrides into direct (for this level) and
+  # nested (to propagate one level deeper). see mkModule docstring for
+  # user-facing format
+  #
+  # input: { "a" = X; "a.b" = Y; "a.b.c" = Z; "d.e" = W; }
+  # output: { direct = { a = X; }; nested = { a = { b = Y; "b.c" = Z; }; d = { e = W; }; }; }
+  partitionOverrides = overrides: let
+    step = acc: key: let
+      parts = lib.splitString "." key;
+    in
+      if builtins.length parts == 1
+      then acc // {direct = acc.direct // {${key} = overrides.${key};};}
+      else let
+        head = builtins.head parts;
+        rest = lib.concatStringsSep "." (builtins.tail parts);
+      in
+        acc
+        // {
+          nested =
+            acc.nested
+            // {
+              ${head} = (acc.nested.${head} or {}) // {${rest} = overrides.${key};};
+            };
+        };
+  in
+    lib.foldl' step {
+      direct = {};
+      nested = {};
+    } (builtins.attrNames overrides);
+
+  # -- tagged-enum flatten support --
+
+  # schemars emits `#[serde(flatten)]` on an enum with `#[serde(tag = ...)]`
+  # as an object with both `properties` (outer) and `oneOf` (variants).
+  # flatten those variants into a single property map: merged variant
+  # fields are optional (they only apply under their tag) and the tag
+  # itself becomes a string enum discriminator. lossy w.r.t. JSON Schema
+  # validation; good enough for home-manager ergonomics.
+  #
+  # returns the variant-derived properties map (empty if no oneOf)
+  expandOneOfVariants = schema:
+    if !(schema ? oneOf)
+    then {}
+    else let
+      variants = builtins.filter (v: (v.type or null) == "object" && v ? properties) schema.oneOf;
+      # discover the discriminator: a property present with `const` in every variant
+      discriminatorCandidates =
+        if variants == []
+        then []
+        else
+          builtins.filter (
+            n:
+              builtins.all (v: (v.properties.${n} or {}) ? const) variants
+          )
+          (builtins.attrNames ((builtins.head variants).properties or {}));
+      disc =
+        if builtins.length discriminatorCandidates >= 1
+        then builtins.head discriminatorCandidates
+        else null;
+      consts =
+        if disc == null
+        then []
+        else map (v: v.properties.${disc}.const) variants;
+      # make each variant-specific prop nullable so enabling a different tag
+      # doesn't require the "wrong" fields to be set
+      wrapOptional = p:
+        if p ? type && builtins.isString p.type
+        then p // {type = [p.type "null"];}
+        else if p ? type && builtins.isList p.type && builtins.elem "null" p.type
+        then p
+        else if p ? anyOf && builtins.any (v: (v.type or null) == "null") p.anyOf
+        then p
+        else
+          p
+          // {
+            anyOf = [
+              (builtins.removeAttrs p ["description" "x-nixcfg-description"])
+              {type = "null";}
+            ];
+          };
+      mergeVariantProps = variant: acc: let
+        vp = builtins.removeAttrs (variant.properties or {}) (lib.optional (disc != null) disc);
+      in
+        acc // (lib.mapAttrs (_: wrapOptional) vp);
+      merged = lib.foldl' (acc: v: mergeVariantProps v acc) {} variants;
+    in
+      if disc == null
+      then merged
+      else
+        merged
+        // {
+          ${disc} = {
+            type = "string";
+            enum = consts;
+            description = "variant discriminator";
+          };
+        };
+
+  # normalise a schema node that may have `properties + oneOf` into one
+  # with just `properties` (merging variant fields in)
+  normaliseSchema = schema:
+    if schema ? oneOf && schema ? properties
+    then schema // {properties = (expandOneOfVariants schema) // schema.properties;}
+    else schema;
+
+  # -- extension inheritance --
+
+  # schemars emits Option<T> where T is a named type as
+  # `anyOf: [{$ref: "#/$defs/T"}, {type: "null"}]`. the anyOf wrapper
+  # carries no x-nixcfg-* extensions even though T itself may have them.
+  # lift those extensions onto the wrapper so downstream checks see them.
+  # same idea is applied for additionalProperties in mapType
+  inheritRefExtensions = root: prop:
+    if prop ? anyOf
+    then let
+      nonNull = builtins.filter (v: (v.type or null) != "null") prop.anyOf;
+      target =
+        if builtins.length nonNull == 1 && (builtins.head nonNull) ? "$ref"
+        then resolveRef root (builtins.head nonNull)."$ref"
+        else {};
+      exts = lib.filterAttrs (k: _: lib.hasPrefix "x-nixcfg-" k) target;
+    in
+      exts // prop
+    else prop;
+
   # -- type mapping --
 
   # map a JSON Schema property to a nix type
   # root: the full schema (for $ref resolution)
   # toNixName: naming transform function
   # prop: the property schema object
-  mapType = root: toNixName: prop: let
+  # nestedOverrides: dotted-path overrides to apply to descendants (may be {})
+  mapType = root: toNixName: nestedOverrides: prop: let
     # resolve $ref first (merge with any sibling properties like description)
-    resolved =
+    refResolved =
       if prop ? "$ref"
       then (resolveRef root prop."$ref") // (builtins.removeAttrs prop ["$ref"])
       else prop;
+    # then hoist x-nixcfg-* extensions from a nullable $ref anyOf target
+    resolved = inheritRefExtensions root refResolved;
 
     type = resolved.type or null;
     isPort = resolved."x-nixcfg-port" or false;
@@ -67,7 +205,7 @@
     if builtins.isList type
     then let
       nonNull = builtins.filter (t: t != "null") type;
-      inner = mapType root toNixName (resolved // {type = builtins.head nonNull;});
+      inner = mapType root toNixName nestedOverrides (resolved // {type = builtins.head nonNull;});
     in
       lib.types.nullOr inner
     # port override
@@ -129,16 +267,27 @@
     then lib.types.float
     # array
     else if type == "array"
-    then lib.types.listOf (mapType root toNixName (resolved.items or {type = "string";}))
-    # object with properties → submodule
+    then lib.types.listOf (mapType root toNixName {} (resolved.items or {type = "string";}))
+    # object with properties: plain submodule, or submodule with freeformType
+    # (open map via additionalProperties), or submodule-with-discriminator
+    # (tagged flatten, oneOf variants)
     else if type == "object" && resolved ? properties
-    then
-      lib.types.submodule {
-        options = mapProperties root toNixName resolved {};
-      }
-    # object with additionalProperties → attrsOf
+    then let
+      # merge in variant properties if this is a tagged-flatten shape
+      normalised = normaliseSchema resolved;
+      subOptions = mapProperties root toNixName normalised nestedOverrides;
+      # if additionalProperties is set alongside properties, allow freeform
+      # extras of that type (schemars emits this for flatten-of-HashMap)
+      hasFreeform = resolved ? additionalProperties;
+      freeformType =
+        if hasFreeform
+        then mapType root toNixName {} resolved.additionalProperties
+        else null;
+    in
+      lib.types.submodule ({options = subOptions;} // lib.optionalAttrs hasFreeform {inherit freeformType;})
+    # object with only additionalProperties → attrsOf
     else if type == "object" && resolved ? additionalProperties
-    then lib.types.attrsOf (mapType root toNixName resolved.additionalProperties)
+    then lib.types.attrsOf (mapType root toNixName {} resolved.additionalProperties)
     # object (bare) → attrsOf str
     else if type == "object"
     then lib.types.attrsOf lib.types.str
@@ -152,12 +301,12 @@
       isNullable = builtins.length nullVariants > 0;
       inner =
         if builtins.length nonNull == 1
-        then mapType root toNixName (builtins.head nonNull)
+        then mapType root toNixName nestedOverrides (builtins.head nonNull)
         # multiple non-null variants: chain types.either across all of them.
         # for the common bool-or-enum case this yields
         # `types.either types.bool (types.enum [...])`
         else let
-          mapped = map (mapType root toNixName) nonNull;
+          mapped = map (mapType root toNixName {}) nonNull;
         in
           lib.foldl' (acc: t: lib.types.either acc t)
           (builtins.head mapped) (builtins.tail mapped);
@@ -192,12 +341,15 @@
     else toNixName name;
 
   # map a single property to a nix option
-  mapProperty = root: toNixName: name: prop: override: let
+  # - direct override: {type=...; description=...;} applied at this level
+  # - nestedOverrides: dotted-path overrides to propagate into submodules
+  mapProperty = root: toNixName: name: prop: override: nestedOverrides: let
     # resolve $ref
-    resolved =
+    refResolved =
       if prop ? "$ref"
       then (resolveRef root prop."$ref") // (builtins.removeAttrs prop ["$ref"])
       else prop;
+    resolved = inheritRefExtensions root refResolved;
 
     isSkipped = resolved."x-nixcfg-skip" or false;
   in
@@ -222,7 +374,7 @@
             then lib.types.nullOr lib.types.path
             else lib.types.path
           )
-        else mapType root toNixName resolved;
+        else mapType root toNixName nestedOverrides resolved;
 
       baseDesc = resolved."x-nixcfg-description" or resolved.description or "";
       nixDesc =
@@ -271,12 +423,20 @@
       ${nixName} = lib.mkOption finalArgs;
     };
 
-  # map all properties in a schema object to nix options
-  mapProperties = root: toNixName: schema: overrides:
+  # map all properties in a schema object to nix options. accepts
+  # overrides as a dotted-path attrset: `{foo = {...}; "foo.bar" = {...};}`
+  mapProperties = root: toNixName: schema: overrides: let
+    parts = partitionOverrides overrides;
+    # handle top-level tagged-flatten: `properties + oneOf` at this level
+    normalised = normaliseSchema schema;
+  in
     lib.foldl' (
       acc: name:
-        acc // mapProperty root toNixName name schema.properties.${name} (overrides.${name} or {})
-    ) {} (builtins.attrNames (schema.properties or {}));
+        acc
+        // mapProperty root toNixName name normalised.properties.${name}
+        (parts.direct.${name} or {})
+        (parts.nested.${name} or {})
+    ) {} (builtins.attrNames (normalised.properties or {}));
 
   # -- public: option generation --
 
@@ -288,6 +448,15 @@
 
   # -- public: NixOS module generation --
 
+  # generate a NixOS module from a JSON Schema
+  #
+  # overrides: per-property attrs merged into each option. keys may be
+  #   dotted paths to reach into nested submodules, e.g. `"db.host".type`
+  # extraOverrides: nix-only options added alongside schema options. when
+  #   `settingsAttr` is set, these go inside the settings submodule
+  # topLevelExtraOverrides: nix-only options added at the top level (next
+  #   to `enable`), regardless of `settingsAttr`. use for things like
+  #   `package` that should live outside the settings submodule
   mkModule = {
     schema,
     naming ? "camelCase",
@@ -295,6 +464,7 @@
     settingsAttr ? null,
     overrides ? {},
     extraOverrides ? {},
+    topLevelExtraOverrides ? {},
   }: let
     parsed =
       if builtins.isAttrs schema && schema ? properties
@@ -304,10 +474,16 @@
     toNixName = namingTransform naming;
     name = parsed."x-nixcfg-name" or parsed.title or "unknown";
 
-    # validate override keys exist in schema properties
+    # validate override keys exist in schema properties. for dotted paths
+    # only the first segment is checked; deeper segments are validated
+    # implicitly by the submodule type system
     unknownOverrides =
-      builtins.filter
-      (k: !(parsed.properties ? ${k}))
+      builtins.filter (
+        k: let
+          head = builtins.head (lib.splitString "." k);
+        in
+          !(parsed.properties ? ${head})
+      )
       (builtins.attrNames overrides);
     validation =
       if unknownOverrides != []
@@ -317,12 +493,14 @@
     opts = builtins.seq validation (mapProperties parsed toNixName parsed overrides);
 
     extraOpts = lib.mapAttrs (_: attrs: lib.mkOption attrs) extraOverrides;
+    topLevelExtraOpts = lib.mapAttrs (_: attrs: lib.mkOption attrs) topLevelExtraOverrides;
 
     optionPath = prefix ++ [name];
 
     schemaOpts = opts // extraOpts;
     topLevel =
       {enable = lib.mkEnableOption (parsed.description or name);}
+      // topLevelExtraOpts
       // (
         if settingsAttr != null
         then {
@@ -344,20 +522,32 @@
   # returns a derivation (store path) for the generated config file.
   # filters out null, empty lists, and empty attrs before serialisation
   #
-  # usage: mkConfigFile { inherit pkgs schema; settings = cfg.settings; }
+  # usage:
+  #   mkConfigFile { inherit pkgs schema; settings = cfg.settings; }
+  #
+  # with settingsAttr (mirrors mkModule): pass the whole cfg and let
+  # mkConfigFile pull out the nested attrset automatically
+  #   mkConfigFile { inherit pkgs schema; settings = cfg; settingsAttr = "settings"; }
   mkConfigFile = {
     pkgs,
     schema,
     settings,
+    settingsAttr ? null,
   }: let
     parsed =
       if builtins.isAttrs schema && schema ? properties
       then schema
       else builtins.fromJSON (builtins.readFile schema);
 
-    configFormat = parsed."x-nixcfg-config-format" or
-      (builtins.throw "nixcfg: mkConfigFile requires x-nixcfg-config-format in schema");
+    configFormat =
+      parsed."x-nixcfg-config-format"
+      or (builtins.throw "nixcfg: mkConfigFile requires x-nixcfg-config-format in schema");
     name = parsed."x-nixcfg-name" or parsed.title or "config";
+
+    effectiveSettings =
+      if settingsAttr != null
+      then settings.${settingsAttr}
+      else settings;
 
     filterSettings = s:
       lib.filterAttrsRecursive (
@@ -370,11 +560,13 @@
         "toml" = pkgs.formats.toml {};
         "json" = pkgs.formats.json {};
         "yaml" = pkgs.formats.yaml {};
-      }.${
+      }
+      .${
         configFormat
-      } or (builtins.throw "nixcfg: unknown config format '${configFormat}', expected one of: toml, json, yaml");
+      }
+      or (builtins.throw "nixcfg: unknown config format '${configFormat}', expected one of: toml, json, yaml");
   in
-    fmt.generate "${name}-config.${configFormat}" (filterSettings settings);
+    fmt.generate "${name}-config.${configFormat}" (filterSettings effectiveSettings);
 
   # -- public: config conversion helpers --
 

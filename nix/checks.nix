@@ -983,4 +983,274 @@ in {
     # fails max length
     assert !(t.check "a-very-long-slug-that-exceeds");
       ok "string-pattern-and-length";
+
+  # ── secret propagation through Option<T> ($ref in anyOf) ──────────
+
+  nix-secret-via-ref-anyof = let
+    # schemars emits Option<Token> (where Token has x-nixcfg-secret on its
+    # type definition) as anyOf [{$ref: Token}, {type: null}]. the wrapper
+    # carries no extension; ensure we hoist it from the $ref target
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "SecretViaRef";
+      "x-nixcfg-name" = "secret-via-ref";
+      type = "object";
+      "$defs".Token = {
+        type = "string";
+        "x-nixcfg-secret" = true;
+      };
+      properties.api_token = {
+        anyOf = [
+          {"$ref" = "#/$defs/Token";}
+          {type = "null";}
+        ];
+        description = "api token";
+      };
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+  in
+    # the option is renamed with `_path` suffix because the ref target is
+    # a secret, and typed as nullOr path (nullable secret)
+    assert opts ? apiTokenPath;
+    assert !(opts ? apiToken);
+    assert opts.apiTokenPath.type.name == "nullOr";
+    assert opts.apiTokenPath.default == null;
+      ok "secret-via-ref-anyof";
+
+  # ── tagged flatten (properties + oneOf) ───────────────────────────
+
+  nix-tagged-flatten = let
+    # schemars emits #[serde(flatten)] on an enum with #[serde(tag = ...)]
+    # as an object with both `properties` (outer) and `oneOf` (variants).
+    # expected result: a submodule merging both, with the tag field as an
+    # enum discriminator
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "Server";
+      "x-nixcfg-name" = "server";
+      type = "object";
+      properties = {
+        enabled = {
+          type = "boolean";
+          default = true;
+        };
+        timeout = {
+          type = "integer";
+          minimum = 0;
+          default = 30;
+        };
+      };
+      oneOf = [
+        {
+          type = "object";
+          properties = {
+            type = {
+              type = "string";
+              const = "Local";
+            };
+            command = {type = "string";};
+          };
+        }
+        {
+          type = "object";
+          properties = {
+            type = {
+              type = "string";
+              const = "Remote";
+            };
+            url = {type = "string";};
+          };
+        }
+      ];
+    };
+    opts = nixcfgLib.optionsFromSchema {} schema;
+    # the whole schema is at the top level, so exercise via a nested usage
+    wrapperSchema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "Wrapper";
+      "x-nixcfg-name" = "wrapper";
+      type = "object";
+      properties.server = schema // {description = "mcp server";};
+    };
+    wrapperOpts = nixcfgLib.optionsFromSchema {} wrapperSchema;
+    serverType = wrapperOpts.server.type;
+  in
+    # top-level options expose outer fields
+    assert opts ? enabled;
+    assert opts ? timeout;
+    # plus every variant's fields merged in
+    assert opts ? command;
+    assert opts ? url;
+    # and the discriminator as an enum
+    assert opts ? type;
+    assert opts.type.type.name == "enum";
+    # variant-specific fields become nullable (only apply under their tag)
+    assert opts.command.type.name == "nullOr";
+    # as a nested submodule: same surface
+    assert serverType.name == "submodule";
+      ok "tagged-flatten";
+
+  # ── properties + additionalProperties → submodule+freeformType ────
+
+  nix-freeform-submodule = let
+    # schemars emits #[serde(flatten)] HashMap<String, T> as a sibling
+    # `additionalProperties: T` alongside named `properties`. expected:
+    # submodule with strict options for named keys + freeformType for the rest
+    schema = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "ApiKeys";
+      "x-nixcfg-name" = "api-keys";
+      type = "object";
+      properties = {
+        anthropic = {
+          type = ["string" "null"];
+          description = "anthropic api key";
+        };
+        openai = {
+          type = ["string" "null"];
+          description = "openai api key";
+        };
+      };
+      additionalProperties = {
+        type = "string";
+        description = "arbitrary provider key";
+      };
+    };
+    # nest under a wrapper so we actually hit mapType's submodule branch
+    wrapper = {
+      "$schema" = "https://json-schema.org/draft/2020-12/schema";
+      title = "Wrapper";
+      "x-nixcfg-name" = "wrapper";
+      type = "object";
+      properties.keys = schema // {description = "api keys";};
+    };
+    opts = nixcfgLib.optionsFromSchema {} wrapper;
+    t = opts.keys.type;
+    # evaluate the submodule with a freeform key to confirm it's accepted
+    eval = lib.evalModules {
+      modules = [
+        {
+          options.keys = lib.mkOption {
+            type = t;
+            default = {};
+          };
+        }
+        {
+          keys = {
+            anthropic = "sk-anthropic";
+            openai = null;
+            groq = "gsk-groq"; # freeform extra
+          };
+        }
+      ];
+    };
+  in
+    assert t.name == "submodule";
+    # named options are present and strictly typed
+    assert eval.config.keys.anthropic == "sk-anthropic";
+    # freeform extra accepted
+    assert eval.config.keys.groq == "gsk-groq";
+      ok "freeform-submodule";
+
+  # ── dotted-path overrides ─────────────────────────────────────────
+
+  nix-dotted-overrides = let
+    # use the complex example which has a nested `database` submodule
+    mod = nixcfgLib.mkModule {
+      schema = ../examples/complex.json;
+      overrides = {
+        # direct: unchanged, validates the existing shape still works
+        data_dir.description = "top-level override";
+        # dotted: reaches into nested submodule
+        "database.host".description = "overridden host description";
+        "database.port".type = lib.types.int;
+      };
+    };
+    evaled = lib.evalModules {modules = [mod];};
+    o = evaled.options.services.complex-app;
+    # peer inside the database submodule
+    # the submodule's option type is lazy; get it via evalModules sub-eval
+    dbSubmod = o.database.type;
+    dbEval = lib.evalModules {
+      modules = [
+        {
+          options.db = lib.mkOption {
+            type = dbSubmod;
+            default = {};
+          };
+        }
+      ];
+    };
+  in
+    # top-level override reaches the option as before
+    assert o.dataDir.description == "top-level override";
+    # nested override applied to the submodule's inner option
+    assert dbEval.options.db.type.getSubOptions [] ? host;
+    assert (dbEval.options.db.type.getSubOptions []).host.description == "overridden host description";
+    # type override landed too
+    assert (dbEval.options.db.type.getSubOptions []).port.type.name == "int";
+      ok "dotted-overrides";
+
+  # ── topLevelExtraOverrides ────────────────────────────────────────
+
+  nix-top-level-extra-overrides = let
+    mod = nixcfgLib.mkModule {
+      schema = ../examples/mycel.json;
+      settingsAttr = "settings";
+      # goes inside the settings submodule
+      extraOverrides.innerOpt = {
+        type = lib.types.str;
+        default = "inner";
+      };
+      # goes outside, next to `enable`
+      topLevelExtraOverrides.package = {
+        type = lib.types.package;
+        description = "package to use";
+      };
+    };
+    evaled = lib.evalModules {modules = [mod];};
+    o = evaled.options.services.mycel;
+  in
+    # top-level has enable and package, but not innerOpt
+    assert o ? enable;
+    assert o ? package;
+    assert !(o ? innerOpt);
+    # settings submodule has schema opts + innerOpt
+    assert o ? settings;
+    assert (o.settings.type.getSubOptions []) ? innerOpt;
+    assert (o.settings.type.getSubOptions []) ? dataDir;
+      ok "top-level-extra-overrides";
+
+  # ── mkConfigFile settingsAttr ─────────────────────────────────────
+
+  nix-mk-config-file-settings-attr = let
+    # build a schema with config format set
+    schema = simple // {"x-nixcfg-config-format" = "toml";};
+    # fake cfg mirroring what a module using settingsAttr = "settings" exposes
+    cfg = {
+      enable = true;
+      settings = {
+        dataDir = "/var/lib/x";
+        model = "claude";
+        logLevel = "info";
+        cacheWarming = false;
+        discordTokenPath = "/run/secrets/x";
+      };
+    };
+    # with settingsAttr: pass the whole cfg
+    drv1 = nixcfgLib.mkConfigFile {
+      inherit pkgs schema;
+      settings = cfg;
+      settingsAttr = "settings";
+    };
+    # without settingsAttr: caller extracts manually
+    drv2 = nixcfgLib.mkConfigFile {
+      inherit pkgs schema;
+      inherit (cfg) settings;
+    };
+  in
+    # both produce a derivation
+    assert lib.isDerivation drv1;
+    assert lib.isDerivation drv2;
+      ok "mk-config-file-settings-attr";
 }
