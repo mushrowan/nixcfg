@@ -124,6 +124,9 @@
       then lib.types.ints.unsigned
       # fallback: plain signed int
       else lib.types.int
+    # number (floats): schemars emits this for f32/f64
+    else if type == "number"
+    then lib.types.float
     # array
     else if type == "array"
     then lib.types.listOf (mapType root toNixName (resolved.items or {type = "string";}))

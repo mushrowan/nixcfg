@@ -80,9 +80,14 @@
       "type": ["array", "null"],
       "items": { "type": "string" },
       "description": "CORS allowed origins"
+    },
+    "load_threshold": {
+      "type": "number",
+      "description": "cosine similarity threshold (0.0-1.0)",
+      "default": 0.5
     }
   },
-  "required": ["hostname", "port", "debug", "workers", "max_retries", "data_dir", "tags", "log_level", "api_key", "database"],
+  "required": ["hostname", "port", "debug", "workers", "max_retries", "data_dir", "tags", "log_level", "api_key", "database", "load_threshold"],
   "$defs": {
     "LogLevel": {
       "type": "string",

@@ -63,6 +63,8 @@
       minimum = -2147483648;
       maximum = 2147483647;
     }
+    else if name == "float"
+    then {type = "number";}
     else if name == "intBetween"
     then {
       type = "integer";

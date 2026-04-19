@@ -84,6 +84,7 @@
     apiKeyPath = "/run/secrets/api";
     dbPasswordPath = null;
     allowedOrigins = ["https://example.com" "https://app.example.com"];
+    loadThreshold = 0.75;
   };
 
   # -- conversion outputs --
@@ -168,6 +169,8 @@ in {
     assert o.apiKeyPath.type.name == "path";
     # optional secret becomes nullOr path
     assert o.dbPasswordPath.type.name == "nullOr";
+    # floats: schemars emits JSON "number" for f32/f64 → types.float
+    assert o.loadThreshold.type.name == "float";
       ok "types";
 
   # ── secrets ───────────────────────────────────────────────────────
