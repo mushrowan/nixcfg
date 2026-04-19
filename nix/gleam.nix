@@ -5,7 +5,7 @@
 }: let
   inherit (nix-gleam.packages.${pkgs.system}) buildGleamApplication;
 
-  referenceSchema = ../drivers/gleam/nixcfg/schema.json;
+  referenceSchema = ../gleam/nixcfg/schema.json;
 
   # nix-gleam's default entrypoint runs the package's main module, which
   # is `nixcfg` here. we want a binary that runs `example_mycel:main/0`,
@@ -13,7 +13,7 @@
   exampleApp = buildGleamApplication {
     pname = "example-mycel-gleam";
     version = "0.3.0";
-    src = ../drivers/gleam/nixcfg;
+    src = ../gleam/nixcfg;
     postInstall = ''
       cat > $out/bin/example_mycel <<EOF
       #!/usr/bin/env sh
@@ -33,7 +33,7 @@
   testRunner = buildGleamApplication {
     pname = "nixcfg-gleam-test";
     version = "0.3.0";
-    src = ../drivers/gleam/nixcfg;
+    src = ../gleam/nixcfg;
     buildPhase = ''
       runHook preBuild
       export REBAR_CACHE_DIR="$TMP/.rebar-cache"

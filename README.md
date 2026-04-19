@@ -99,7 +99,7 @@ println!("{}", schema.to_json_pretty());
 # services.myapp.logLevel       (enum)
 ```
 
-see `drivers/rust/example-mycel/` for a complete demo, including a flake
+see `rust/example-mycel/` for a complete demo, including a flake
 check that diffs the binary's output against a checked-in `schema.json` so
 the struct and the schema can't drift apart.
 
@@ -107,8 +107,8 @@ the struct and the schema can't drift apart.
 
 | language | location | notes |
 |---|---|---|
-| rust | `drivers/rust/` | uses [schemars](https://graham.cool/schemars/) + `#[nixcfg]` macro |
-| gleam | `drivers/gleam/` | builder DSL, runs on BEAM |
+| rust | `rust/` | uses [schemars](https://graham.cool/schemars/) + `#[nixcfg]` macro |
+| gleam | `gleam/` | builder DSL, runs on BEAM |
 
 any language with a JSON Schema library can be a driver.
 
@@ -193,7 +193,7 @@ modifiers: `default`, `description`, `example`, `pattern`, `min_length`,
 `max_length`, `secret`, `port`, `path`, `skip`, `override_description`,
 `override_example`.
 
-see `drivers/gleam/nixcfg/src/example_mycel.gleam` for a complete demo.
+see `gleam/nixcfg/src/example_mycel.gleam` for a complete demo.
 
 ### other languages
 
