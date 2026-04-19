@@ -6,8 +6,7 @@
 #   process.argv wired up from config
 #
 # compatible with nixpkgs system.services.<instance>
-{lib, nixcfgLib}: let
-
+{nixcfgLib}: let
   mkModularService = {
     # JSON Schema (attrset or path to JSON file)
     schema,
@@ -26,44 +25,50 @@
       else builtins.fromJSON (builtins.readFile schema);
 
     name = parsed."x-nixcfg-name" or parsed.title or "unknown";
-    desc = parsed.description or name;
     toNixName = nixcfgLib.namingTransform naming;
 
     schemaOpts = nixcfgLib.mapProperties parsed toNixName parsed {};
   in
-    {config, options, lib, ...}: {
+    {
+      config,
+      options,
+      lib,
+      ...
+    }: {
       _class = "service";
 
       imports = extraModules;
 
-      options.${name} = schemaOpts // {
-        package = lib.mkOption {
-          type = lib.types.package;
-          description = "package providing ${name}";
-        };
-      };
-
-      config = {
-        process.argv =
-          if mkArgv != null
-          then mkArgv config.${name}
-          else [
-            (lib.getExe config.${name}.package)
-          ];
-      }
-      // lib.optionalAttrs (options ? systemd) {
-        systemd.service = {
-          after = ["network.target"];
-          wants = ["network.target"];
-          wantedBy = ["multi-user.target"];
-          serviceConfig = {
-            Restart = "always";
-            DynamicUser = true;
+      options.${name} =
+        schemaOpts
+        // {
+          package = lib.mkOption {
+            type = lib.types.package;
+            description = "package providing ${name}";
           };
         };
-      };
-    };
 
+      config =
+        {
+          process.argv =
+            if mkArgv != null
+            then mkArgv config.${name}
+            else [
+              (lib.getExe config.${name}.package)
+            ];
+        }
+        // lib.optionalAttrs (options ? systemd) {
+          systemd.service = {
+            after = ["network.target"];
+            wants = ["network.target"];
+            wantedBy = ["multi-user.target"];
+            serviceConfig = {
+              Restart = "always";
+              DynamicUser = true;
+            };
+          };
+        };
+    };
 in {
   inherit mkModularService;
 }

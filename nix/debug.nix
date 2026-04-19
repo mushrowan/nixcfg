@@ -8,7 +8,8 @@
   # resolve a $ref against the root schema
   resolveRef = root: ref: let
     path = lib.splitString "/" (lib.removePrefix "#/" ref);
-  in lib.getAttrFromPath path root;
+  in
+    lib.getAttrFromPath path root;
 
   # format a JSON Schema type as a nix type string
   fmtType = root: prop: let
@@ -24,12 +25,16 @@
       nonNull = builtins.filter (t: t != "null") type;
       inner = fmtType root (resolved // {type = builtins.head nonNull;});
     in "types.nullOr (${inner})"
-    else if isPort then "types.port"
+    else if isPort
+    then "types.port"
     else if type == "string" && resolved ? enum
     then "types.enum [ ${lib.concatMapStringsSep " " (v: "\"${v}\"") resolved.enum} ]"
-    else if type == "string" then "types.str"
-    else if type == "boolean" then "types.bool"
-    else if type == "integer" then
+    else if type == "string"
+    then "types.str"
+    else if type == "boolean"
+    then "types.bool"
+    else if type == "integer"
+    then
       if resolved ? minimum && resolved.minimum == 0
       then "types.ints.unsigned"
       else "types.int"
@@ -39,7 +44,8 @@
     then "types.submodule { ... }"
     else if type == "object" && resolved ? additionalProperties
     then "types.attrsOf (${fmtType root resolved.additionalProperties})"
-    else if type == "object" then "types.attrsOf types.str"
+    else if type == "object"
+    then "types.attrsOf types.str"
     else "types.str";
 
   # format a single option
@@ -57,7 +63,12 @@
 
     nixType =
       if isSecret
-      then (if isNullable then "types.nullOr types.path" else "types.path")
+      then
+        (
+          if isNullable
+          then "types.nullOr types.path"
+          else "types.path"
+        )
       else fmtType root resolved;
 
     desc = resolved.description or "";
@@ -80,7 +91,7 @@
   fmtProperties = root: toNixName: indent: schema:
     lib.concatStringsSep "\n\n" (
       map (name: fmtOption root toNixName indent name schema.properties.${name})
-        (builtins.attrNames (schema.properties or {}))
+      (builtins.attrNames (schema.properties or {}))
     );
 
   # format a full schema
