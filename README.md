@@ -75,8 +75,14 @@ enum LogLevel { Trace, Debug, Info, Warn, Error }
 emit the schema and consume in nix:
 
 ```rust
+// one-liner when Config: Default + Serialize
+fn main() {
+    print!("{}", nixcfg::emit::<Config>("myapp"));
+}
+
+// or step-by-step if you need to add extensions / tweak output
 let defaults = serde_json::to_value(Config::default()).unwrap();
-let schema = NixSchema::from::<Config>("myapp").with_defaults(defaults);
+let schema = nixcfg::NixSchema::from::<Config>("myapp").with_defaults(defaults);
 println!("{}", schema.to_json_pretty());
 ```
 
@@ -229,17 +235,33 @@ all naming conventions are available everywhere: `camelCase`, `snake_case`,
 nixcfg.lib.mkModule {
   schema = ./schema.json;
   overrides = {
+    # direct override of a top-level option
     data_dir.type = lib.types.either lib.types.path lib.types.str;
+    # dotted path reaches into a nested submodule option
+    "database.host".type = lib.types.str;
   };
+  # nix-only options inside `services.myapp.settings.*` (when settingsAttr
+  # is set), or alongside schema opts otherwise
   extraOverrides = {
+    socketPath = { type = lib.types.path; description = "unix socket"; };
+  };
+  # nix-only options at `services.myapp.*` top level, next to `enable`.
+  # useful for things like `package` that shouldn't live inside settings
+  topLevelExtraOverrides = {
     package = { type = lib.types.package; description = "package to use"; };
   };
 }
 ```
 
 `overrides` keys are validated against the schema (catches drift when fields
-are renamed). `extraOverrides` adds nix-only options (like `package` or
-`user`) that don't exist in the schema.
+are renamed). dotted keys are validated by first segment only; deeper
+segments are checked by the submodule type system at eval time.
+
+- `extraOverrides` adds nix-only options alongside schema opts. when
+  `settingsAttr` is set, they land inside the settings submodule
+- `topLevelExtraOverrides` adds nix-only options at the top level (next
+  to `enable`), regardless of `settingsAttr`. use for options that
+  shouldn't be serialised into the config file
 
 ### settingsAttr
 
@@ -275,15 +297,71 @@ nixcfg maps JSON Schema validation keywords to nix type checks at eval time:
   `minimum`+`maximum` maps to `types.ints.between`, `minimum: 0` alone
   maps to `types.ints.unsigned`
 
+## gotchas
+
+### `#[schemars(extend)]` on the type vs on the field
+
+extensions on a type definition (`#[schemars(extend("x-nixcfg-secret" =
+true))] struct ApiKey(String);`) put the extension on `$defs/ApiKey`.
+nixcfg will inherit `x-nixcfg-*` extensions from the `$ref` target when a
+field's schema is `anyOf: [{$ref: ApiKey}, {type: null}]` (the standard
+schemars shape for `Option<ApiKey>`), so secrets on wrapper types
+propagate through optional fields automatically. for non-nullable
+references, the $ref target's extensions don't currently propagate, so
+prefer annotating the field directly:
+
+```rust
+struct Config {
+    #[nixcfg(secret)]
+    api_key: ApiKey,             // works
+    #[nixcfg(secret)]            // not strictly needed, but clearer
+    optional_key: Option<ApiKey>,
+}
+```
+
+### `settingsAttr` + top-level options (`package`, `enable`, etc.)
+
+use `topLevelExtraOverrides` to add nix-only options outside the
+settings submodule. previously consumers had to hand-write a second
+module for things like `package`; `topLevelExtraOverrides` bakes that in.
+
+### `schema_with` escape hatch for foreign types
+
+types that can't implement `JsonSchema` (foreign crates, trait objects,
+etc.) can hand-roll their fragment via schemars's `schema_with`:
+
+```rust
+#[schemars(schema_with = "my_type_schema")]
+complex_field: SomeType,
+```
+
+nixcfg extensions in the returned JSON pass through untouched.
+
+### tagged flatten (`#[serde(flatten)] + #[serde(tag = "...")]`)
+
+schemars emits this as `{properties, oneOf}`. nixcfg merges variant
+properties into a single submodule with the tag field as a string enum
+discriminator. variant-specific fields become nullable so switching tags
+doesn't require setting "wrong-variant" fields. this is lossy w.r.t.
+strict JSON Schema validation but matches home-manager ergonomics.
+
+### flatten of `HashMap<String, T>`
+
+schemars emits this as `{properties, additionalProperties}`. nixcfg
+turns it into a submodule with `freeformType = T`, so the named fields
+stay strict and freeform extras are accepted and typed.
+
 ## checks
 
-`nix flake check` runs 50 checks:
+`nix flake check` runs 58 checks:
 
-- **42 nix lib tests**: naming, types, secrets, defaults, module generation,
-  cli/env/config conversion, overrides, reverse driver, modular service,
-  extensions, format-aware ints, string validation, anyOf, etc
-- **5 rust checks**: build, clippy (deny warnings), nextest (12 tests),
-  cargo-deny, doctest
+- **48 nix lib tests**: naming, types, secrets, defaults, module generation,
+  cli/env/config conversion, overrides (including dotted paths +
+  `topLevelExtraOverrides`), reverse driver, modular service, extensions,
+  format-aware ints, string validation, anyOf, tagged-flatten merging,
+  freeformType for open-map submodules, secret inheritance through $ref
+- **5 rust checks**: build, clippy (deny warnings), nextest, cargo-deny,
+  doctest
 - **1 schema drift check** (rust): example binary output diffed against checked-in `schema.json`
 - **1 gleam schema drift check** + **1 gleam unit test**: builds the gleam nixcfg package, runs gleeunit tests, verifies the example app's output matches checked-in `schema.json`
 - **2 formatting**: treefmt wrapper + pre-commit hook
