@@ -581,6 +581,8 @@
     schema,
     settings,
     settingsAttr ? null,
+    naming ? "camelCase",
+    output ? "snake_case",
   }: let
     parsed =
       if builtins.isAttrs schema && schema ? properties
@@ -596,6 +598,14 @@
       if settingsAttr != null
       then settings.${settingsAttr}
       else settings;
+
+    # convert nix-naming back to the output naming (default snake_case)
+    # using the schema so nested object keys get renamed recursively.
+    # without this, `database.poolSize = 10` stays camelCase in the
+    # emitted file and downstream consumers (rust serde with snake_case
+    # fields, etc.) silently drop the setting
+    convertedSettings =
+      toConfigAttrs {inherit naming output;} parsed effectiveSettings;
 
     filterSettings = s:
       lib.filterAttrsRecursive (
@@ -614,7 +624,7 @@
       }
       or (builtins.throw "nixcfg: unknown config format '${configFormat}', expected one of: toml, json, yaml");
   in
-    fmt.generate "${name}-config.${configFormat}" (filterSettings effectiveSettings);
+    fmt.generate "${name}-config.${configFormat}" (filterSettings convertedSettings);
 
   # -- public: config conversion helpers --
 

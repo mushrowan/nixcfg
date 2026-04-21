@@ -1267,6 +1267,29 @@ in {
     assert lib.isDerivation drv2;
       ok "mk-config-file-settings-attr";
 
+  # ── mkConfigFile emits snake_case keys ────────────────────────────
+  #
+  # regression for the bug that was silently dropping every setting on
+  # the downstream rust side. the emitted TOML must contain the output
+  # naming (snake_case by default), not the nix-naming (camelCase)
+  nix-mk-config-file-snake-output = let
+    schema = complex // {"x-nixcfg-config-format" = "toml";};
+    drv = nixcfgLib.mkConfigFile {
+      inherit pkgs schema;
+      settings = complexCfg;
+    };
+    contents = builtins.readFile "${drv}";
+  in
+    assert lib.isDerivation drv;
+    # nested object key got converted (database.poolSize -> pool_size)
+    assert lib.hasInfix "pool_size" contents;
+    assert !(lib.hasInfix "poolSize" contents);
+    # top-level snake_case key arrives unchanged
+    assert lib.hasInfix "max_retries" contents;
+    # secret path suffix applied for the output
+    assert lib.hasInfix "api_key_path" contents;
+      ok "mk-config-file-snake-output";
+
   # ── struct-level default with secret-renamed keys ─────────────────
 
   nix-default-rewrites-secret-keys = let
