@@ -736,27 +736,118 @@
       else builtins.fromJSON (builtins.readFile schema);
     toNixName = namingTransform naming;
     toOutput = namingTransform output;
-  in
-    lib.foldl' (
-      acc: name: let
-        prop = parsed.properties.${name};
-        resolved =
-          if prop ? "$ref"
-          then (resolveRef parsed prop."$ref") // (builtins.removeAttrs prop ["$ref"])
-          else prop;
-        isSecret = resolved."x-nixcfg-secret" or false;
-        nixName = nixNameFor toNixName name resolved;
-        attrName = toOutput (
-          if isSecret
-          then "${name}_path"
-          else name
-        );
-        value = cfg.${nixName} or null;
+
+    # walk a resolved schema node against a nix value, returning the
+    # converted value (or null to signal drop-me-from-the-parent).
+    # shared `parsed` holds the root for $ref resolution
+    resolveNode = node:
+      if node ? "$ref"
+      then (resolveRef parsed node."$ref") // (builtins.removeAttrs node ["$ref"])
+      else node;
+
+    # pick the object-shaped variant out of an anyOf/oneOf list, so
+    # `Option<Nested>` (anyOf: [ { $ref: Nested }, { null } ]) still
+    # recurses into the nested object
+    objectVariant = variants:
+      lib.findFirst (
+        v: let
+          r = resolveNode v;
+        in
+          (r.type or null) == "object" || r ? properties
+      )
+      null
+      variants;
+
+    # expand a node that's an anyOf/oneOf wrapper to its object-variant.
+    # leaves plain object nodes untouched
+    expand = node: let
+      resolved = resolveNode node;
+      variant =
+        if resolved ? anyOf
+        then objectVariant resolved.anyOf
+        else if resolved ? oneOf
+        then objectVariant resolved.oneOf
+        else null;
+    in
+      if variant != null
+      then resolveNode variant
+      else resolved;
+
+    # convert a value against its schema node. scalars pass through,
+    # arrays map element-wise, objects recurse via `convertObject`
+    convertValue = node: value: let
+      resolved = expand node;
+      isArray = (resolved.type or null) == "array";
+      # `additionalProperties` is either a bool or a schema object per
+      # json-schema. any non-`false` value means "extra keys allowed",
+      # which is how freeform maps (`mcp`, `model_tiers`, …) show up.
+      # use builtins.isAttrs so alejandra can't rewrite the comparison
+      additional = resolved.additionalProperties or false;
+      hasAdditional = builtins.isAttrs additional || additional;
+      isObject = resolved ? properties || hasAdditional;
+    in
+      if value == null
+      then null
+      else if isArray && resolved ? items
+      then map (convertValue resolved.items) value
+      else if isObject
+      then convertObject resolved value
+      else value;
+
+    # convert a nix attrset against an object schema node. iterates the
+    # schema properties for known keys (renaming + recursing), then
+    # falls back to verbatim passthrough for any additional keys, which
+    # covers `additionalProperties` freeform maps like mush's `mcp`
+    convertObject = objNode: value:
+      if !(builtins.isAttrs value)
+      then value
+      else let
+        props = objNode.properties or {};
+        schemaKeys = builtins.attrNames props;
+        # first pass: known schema properties, with name/value conversion
+        known =
+          lib.foldl' (
+            acc: schemaKey: let
+              sub = resolveNode props.${schemaKey};
+              isSecret = sub."x-nixcfg-secret" or false;
+              nixKey = nixNameFor toNixName schemaKey sub;
+              outKey = toOutput (
+                if isSecret
+                then "${schemaKey}_path"
+                else schemaKey
+              );
+              subVal = value.${nixKey} or null;
+              converted =
+                if subVal == null
+                then null
+                else convertValue sub subVal;
+            in
+              if converted == null
+              then acc
+              else acc // {${outKey} = converted;}
+          ) {}
+          schemaKeys;
+        # second pass: any keys in the nix input that didn't match a
+        # schema property (freeform maps). pass through verbatim since
+        # user-supplied keys are opaque
+        knownNixKeys =
+          map (k: nixNameFor toNixName k (resolveNode props.${k})) schemaKeys;
+        extraKeys =
+          builtins.filter (k: !(builtins.elem k knownNixKeys)) (builtins.attrNames value);
+        extras =
+          lib.foldl' (
+            acc: k: let
+              v = value.${k};
+            in
+              if v == null
+              then acc
+              else acc // {${k} = v;}
+          ) {}
+          extraKeys;
       in
-        if value == null
-        then acc
-        else acc // {${attrName} = value;}
-    ) {} (builtins.attrNames (parsed.properties or {}));
+        known // extras;
+  in
+    convertObject parsed cfg;
 
   debugLib = import ./debug.nix {inherit lib nixcfgLib;};
   fromOptionsLib = import ./from-options.nix {inherit lib;};

@@ -311,6 +311,19 @@ in {
   assert !(complexConfig ? optional_feature);
     ok "config-complex";
 
+  # nested objects must also have their keys converted. `database.pool_size`
+  # is the simplest proof: nix input is `database.poolSize = 10`, output
+  # must be `database.pool_size = 10`. before the recursive fix, the inner
+  # `poolSize` key was passed through verbatim and the rust-side consumer
+  # would silently drop it on deserialisation.
+  nix-config-nested-keys = assert complexConfig.database.host == "db.internal";
+  assert complexConfig.database.port == 5432;
+  assert complexConfig.database.name == "mydb";
+  assert complexConfig.database ? pool_size;
+  assert complexConfig.database.pool_size == 10;
+  assert !(complexConfig.database ? poolSize);
+    ok "config-nested-keys";
+
   # custom output naming for config
   nix-config-output-naming = let
     cfg = nixcfgLib.toConfigAttrs {output = "camelCase";} simple simpleCfg;
