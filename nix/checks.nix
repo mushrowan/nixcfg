@@ -161,6 +161,10 @@ in {
     assert o.tags.type.name == "listOf";
     # attrs (additionalProperties)
     assert o.labels.type.name == "attrsOf";
+    # attrs of $ref unions keep the referenced type, instead of falling
+    # back to strings
+    assert o.keybinds.type.name == "attrsOf";
+    assert o.keybinds.type.nestedTypes.elemType.name == "either";
     # submodule (object with properties, via $ref)
     assert o.database.type.name == "submodule";
     # nullable array

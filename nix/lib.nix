@@ -160,6 +160,23 @@
 
   # -- extension inheritance --
 
+  # JSON Schema `additionalProperties` can itself be a `$ref`. resolve it
+  # before mapping the value type so maps of named object/union types keep
+  # their real nix type instead of falling back to strings.
+  resolveAdditionalProperties = root: schema:
+    if schema ? additionalProperties && builtins.isAttrs schema.additionalProperties
+    then
+      schema
+      // {
+        additionalProperties =
+          if schema.additionalProperties ? "$ref"
+          then
+            (resolveRef root schema.additionalProperties."$ref")
+            // (builtins.removeAttrs schema.additionalProperties ["$ref"])
+          else schema.additionalProperties;
+      }
+    else schema;
+
   # schemars emits Option<T> where T is a named type as
   # `anyOf: [{$ref: "#/$defs/T"}, {type: "null"}]`. the anyOf wrapper
   # carries no x-nixcfg-* extensions even though T itself may have them.
@@ -192,7 +209,7 @@
       then (resolveRef root prop."$ref") // (builtins.removeAttrs prop ["$ref"])
       else prop;
     # then hoist x-nixcfg-* extensions from a nullable $ref anyOf target
-    resolved = inheritRefExtensions root refResolved;
+    resolved = resolveAdditionalProperties root (inheritRefExtensions root refResolved);
 
     type = resolved.type or null;
     isPort = resolved."x-nixcfg-port" or false;

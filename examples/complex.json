@@ -53,6 +53,13 @@
       "additionalProperties": { "type": "string" },
       "description": "key-value labels"
     },
+    "keybinds": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/BindingSource"
+      },
+      "description": "keybindings keyed by action"
+    },
     "log_level": {
       "$ref": "#/$defs/LogLevel",
       "description": "log level",
@@ -92,6 +99,16 @@
     "LogLevel": {
       "type": "string",
       "enum": ["trace", "debug", "info", "warn", "error"]
+    },
+    "BindingSource": {
+      "description": "a string or list of strings",
+      "anyOf": [
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      ]
     },
     "DatabaseConfig": {
       "type": "object",
